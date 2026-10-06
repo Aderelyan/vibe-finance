@@ -13,6 +13,44 @@ Di contoh output:
 - `"<acak>"` adalah nilai acak (`group_id`), berbeda di setiap pemanggilan.
 - Daftar yang panjang dipotong menjadi 3 elemen pertama. Output asli berisi semuanya.
 
+## Cara memanggil
+
+Dari terminal Windows di folder project:
+
+```
+.venv\Scripts\python finance.py <perintah> [opsi]
+```
+
+Dari bash (MSYS / Git Bash), misalnya oleh bot, pakai pembungkus `fin.sh` di root project. Contoh di dokumen ini
+diawali `python finance.py`; lewat bash ganti awalan itu dengan `bash <path>/fin.sh`, sisanya sama persis.
+
+```bash
+bash C:/path/ke/vibe-finance/fin.sh context
+bash C:/path/ke/vibe-finance/fin.sh add --type expense --item "ayam goreng|15k|makan"
+bash C:/path/ke/vibe-finance/fin.sh adjust --account tunai --actual=-5k
+
+bash C:/path/ke/vibe-finance/fin.sh batch --stdin <<'EOF'
+[
+  {"cmd": "add", "args": {"type": "expense", "item": ["nasi padang|20k|makan", "es teh|3k"]}},
+  {"cmd": "budget alloc", "args": {"item": "makan|100k"}}
+]
+EOF
+```
+
+Yang dilakukan `fin.sh`:
+- Mencari foldernya sendiri, jadi bisa dipanggil dari folder mana pun lewat path apa pun. Folder kerja pemanggil
+  tidak diubah, jadi path relatif (`batch --file x.json`, `export --out x.xlsx`) tetap relatif ke folder pemanggil.
+- Jika `FINANCE_HOME` belum diisi, memakai `<profil pengguna Windows>/Documents/Manager/Finance/data`
+  (dari `USERPROFILE`). Jika sudah diisi, tidak ditimpa; bentuk MSYS seperti `/c/data` diubah menjadi `C:/data`.
+- Mengisi `PYTHONIOENCODING=utf-8` dan `PYTHONUTF8=1`.
+- Menjalankan `.venv/Scripts/python.exe finance.py "$@"`: semua argumen diteruskan apa adanya, termasuk spasi, `|`,
+  `--actual=-5k`, dan teks yang diawali `/` (konversi path otomatis MSYS dimatikan). Stdin tetap tersambung
+  (`batch --stdin` dengan heredoc), exit code diteruskan.
+- Stdout hanya berisi output `finance.py`. Jika `.venv` tidak ada, stdout berisi JSON
+  `{"ok": false, "error": {"code": "INTERNAL", ...}}` dengan petunjuk membuat `.venv`, dan exit code 1.
+
+Dengan heredoc, pakai `<<'EOF'` (bertanda kutip) supaya `$` dan `` ` `` di dalam JSON tidak diproses bash.
+
 ## Daftar isi
 
 1. [Aturan umum](#aturan-umum): bentuk output, exit code, kode error

@@ -101,6 +101,21 @@ python finance.py batch --file catatan.json
 
 Referensi lengkap semua perintah ada di [COMMANDS.md](COMMANDS.md).
 
+## Dari bash (MSYS / Git Bash)
+
+`fin.sh` membungkus `finance.py` supaya bisa dipanggil dari bash, dari folder mana pun:
+
+```bash
+bash C:/path/ke/vibe-finance/fin.sh context
+bash C:/path/ke/vibe-finance/fin.sh add --type expense --item "ayam goreng|15k|makan"
+bash C:/path/ke/vibe-finance/fin.sh batch --stdin <<'EOF'
+[{"cmd": "add", "args": {"type": "expense", "item": "kopi|8k"}}]
+EOF
+```
+
+Tanpa `FINANCE_HOME`, datanya ada di `<profil pengguna>/Documents/Manager/Finance/data`. Argumen, stdin, dan exit
+code diteruskan apa adanya; stdout hanya berisi JSON. Rinciannya di bagian awal COMMANDS.md.
+
 - `--item` berformat `catatan|jumlah|kategori`; kategori boleh dikosongkan (ditebak dari kata kunci, atau `lainnya`).
 - Nominal: `15000`, `15.000`, `15k`, `15rb`, `15 ribu`, `1,5jt`, `2 juta`, `Rp15.000`.
   Nilai negatif untuk `--opening`/`--actual` ditulis dengan tanda sama dengan: `--opening=-5k`.

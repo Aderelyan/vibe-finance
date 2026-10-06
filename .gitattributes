@@ -1,0 +1,2 @@
+# skrip bash harus tetap LF walau git di Windows memakai CRLF
+*.sh text eol=lf
