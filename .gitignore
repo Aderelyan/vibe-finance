@@ -1,6 +1,8 @@
 data/
+*.db
+*.xlsx
+setup_awal.cmd
 .venv/
 __pycache__/
 .pytest_cache/
 *.pyc
-setup_awal.cmd
