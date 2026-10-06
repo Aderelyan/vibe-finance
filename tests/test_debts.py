@@ -272,6 +272,7 @@ def test_remove_rules(wallets):
     fin.ok("debt", "add", "--direction", "owed_to_me", "--person", "Andi", "--amount", "100k")
     n, before = fin.count_tx(), fin.balance("tunai")
     r = fin.err("NOT_EMPTY", "debt", "remove", "--person", "Andi")
+    assert r["error"]["message"].startswith("Piutang dari Andi (#")  # nama orang tidak ikut dikecilkan
     assert "--write-off" in r["error"]["hint"] and "debt pay" in r["error"]["hint"]
     assert r["error"]["data"]["remaining"] == 100_000
     assert fin.count_tx() == n

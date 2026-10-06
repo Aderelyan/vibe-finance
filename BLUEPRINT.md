@@ -76,6 +76,7 @@ vibe-finance\
     export.py
     commands\           # satu file per kelompok perintah
   tests\
+  tools\commands_doc.py # menjalankan contoh di COMMANDS.md dan mengisi outputnya
   docs\                 # dokumen perubahan (PERUBAHAN-xx.md)
   data\                 # finance.db, backups\, exports\  (tidak masuk git)
   demo.py               # lihat bagian 9
@@ -365,6 +366,8 @@ Output selalu satu objek JSON di stdout, tidak ada teks lain:
 | `analyze --period ...` | Lihat bagian 8. |
 | `export --period ... [--out]` | Buat .xlsx di `data\exports`. Kembalikan path file di `data.path`. |
 | `daily-check --when pagi\|malam` | Lihat bagian 8. |
+| `context` | Tanggal hari ini, dompet (nama, tipe, saldo, default), kategori, budget, tabungan, alias, kata kunci, hutang terbuka, tagihan rutin. Untuk pemanggil sebelum menyusun perintah. |
+| `batch --file <path.json> \| --stdin` | Daftar `{"cmd": ..., "args": {...}}` untuk `add`, `transfer`, `adjust`, `budget alloc`, `budget move`, `debt add`, `debt pay`, `recurring pay`. Setiap entri di-parse oleh parser CLI yang sama; semua dalam satu transaksi database dan satu `group_id` (satu `undo`). Format lengkap di `COMMANDS.md`. |
 | `backup` | Backup manual. |
 
 ## 8. Analisis, pengecekan harian, ekspor
@@ -470,7 +473,7 @@ Checkpoint: beri pengguna sekitar 10 perintah terminal untuk dicoba sendiri, len
 **Tahap 3: Analisis dan ekspor.** (selesai) `analyze`, `daily-check`, `export`, `demo.py`.
 Checkpoint: pengguna menjalankan `python demo.py` dan membuka file Excel hasil ekspor.
 
-**Tahap 4: Dokumentasi serah terima.** Tulis `COMMANDS.md`: setiap perintah dengan semua opsinya, satu contoh pemanggilan, contoh output sukses, dan error yang mungkin muncul. Dokumen ini akan menjadi dasar integrasi dengan bot AI nanti, jadi harus lengkap dan cocok persis dengan perilaku kode. Buat tes yang memastikan setiap perintah di `COMMANDS.md` memang ada di CLI.
+**Tahap 4: Dokumentasi serah terima.** (selesai) Ditambah perintah `context` dan `batch`. Contoh di `COMMANDS.md` dijalankan sungguhan oleh `tools\commands_doc.py` (yang juga mengisi blok output-nya), dan `tests\test_commands_doc.py` memastikan setiap perintah dan opsi CLI terdokumentasi, setiap contoh termasuk contoh batch menghasilkan output yang tertulis, setiap perintah di tabel pemetaan chat valid, dan semua skenario wajib bagian 9 ada di tabel itu. Tulis `COMMANDS.md`: setiap perintah dengan semua opsinya, satu contoh pemanggilan, contoh output sukses, dan error yang mungkin muncul. Dokumen ini akan menjadi dasar integrasi dengan bot AI nanti, jadi harus lengkap dan cocok persis dengan perilaku kode. Buat tes yang memastikan setiap perintah di `COMMANDS.md` memang ada di CLI.
 
 Setiap tahap: semua tes harus lolos, lalu commit git, perbarui `README.md`, lalu push ke GitHub.
 

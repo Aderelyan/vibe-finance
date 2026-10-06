@@ -399,20 +399,19 @@ def cmd_undo(args, conn):
     else:
         msg = f"Dibatalkan {len(lines)} catatan dari pencatatan terakhir:\n" + "\n".join(f"- {x}" for x in lines) + "\n"
     label = {"accounts": "dompet ", "budgets": "budget ", "categories": "kategori ", "debts": ""}
-    if restored:
-        msg = msg.rstrip("\n") + " Diaktifkan kembali: " + \
-            ", ".join(f"{label[r['table']]}{r['name']}" for r in restored) + "."
-    if removed:
-        msg = msg.rstrip("\n") + " Ikut dihapus: " + \
-            ", ".join(f"{label[r['table']]}{r['name']} (#{r['id']})" for r in removed) + "."
     tail = []
+    if restored:
+        tail.append("Diaktifkan kembali: " + ", ".join(f"{label[r['table']]}{r['name']}" for r in restored) + ".")
+    if removed:
+        tail.append("Ikut dihapus: " + ", ".join(f"{label[r['table']]}{r['name']} (#{r['id']})" for r in removed) + ".")
     if rows:
         tail.append(balance_sentence(conn, _accounts_of(rows)))
     bud_ids = [r["budget_id"] for r in rows if r["budget_id"]]
     bud_ids += [x for m in moves for x in (m["from_budget_id"], m["to_budget_id"])]
     if bud_ids:
         tail.append(budgets.sentence(conn, bud_ids))
-    msg = msg.rstrip("\n") + " " + " ".join(tail)
+    # daftar banyak baris: ringkasan di baris baru supaya tidak menempel ke baris terakhir
+    msg = (msg + " ".join(tail)) if msg.endswith("\n") else (msg + " " + " ".join(tail))
     return success(msg, {"group_id": gid, "action": group["action"], "undone": [r["id"] for r in rows],
                          "undone_moves": [m["id"] for m in moves], "restored": restored, "removed": removed,
                          "transactions": [tx_dict(r) for r in rows]})

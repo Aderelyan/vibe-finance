@@ -41,11 +41,10 @@ def totals(conn):
     return owe, owed
 
 
-def title(debt):
-    """'hutang ke Budi' / 'piutang dari Andi'"""
-    if debt["direction"] == "i_owe":
-        return f"hutang ke {debt['person']}"
-    return f"piutang dari {debt['person']}"
+def title(debt, cap=False):
+    """'hutang ke Budi' / 'piutang dari Andi'. cap=True: huruf pertama kalimat saja yang dibesarkan."""
+    text = ("hutang ke " if debt["direction"] == "i_owe" else "piutang dari ") + debt["person"]
+    return text[0].upper() + text[1:] if cap else text
 
 
 def due_text(due_date):

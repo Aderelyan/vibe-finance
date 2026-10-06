@@ -22,7 +22,15 @@ def new_group(conn, action, restore=None):
     """Satu pemanggilan perintah = satu group. Urutan op_groups.id dipakai undo.
 
     restore: [[tabel, id], ...] yang diaktifkan lagi (archived = 0) jika group ini di-undo.
+    Di dalam batch, semua perintah memakai group batch; restore-nya digabung.
     """
+    if conn.batch_group is not None:
+        if restore:
+            row = conn.execute("SELECT restore FROM op_groups WHERE group_id = ?", (conn.batch_group,)).fetchone()
+            merged = (json.loads(row["restore"]) if row["restore"] else []) + restore
+            conn.execute("UPDATE op_groups SET restore = ? WHERE group_id = ?",
+                         (json.dumps(merged), conn.batch_group))
+        return conn.batch_group
     group_id = uuid.uuid4().hex[:12]
     conn.execute("INSERT INTO op_groups(group_id, action, restore, created_at) VALUES (?,?,?,?)",
                  (group_id, action, json.dumps(restore) if restore else None, clock.now_ts()))

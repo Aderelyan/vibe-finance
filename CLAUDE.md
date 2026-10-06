@@ -26,6 +26,11 @@ riwayat perubahan spesifikasi ada di `docs\`.
 - `fin/report.py`: ringkasan per kategori. `fin/debts.py`: sisa dan status hutang, `find()` dari `--person`/`--id`.
 - `fin/analysis.py`: fakta `analyze` (periode sebelumnya, harian, proyeksi). `fin/export.py`: workbook .xlsx;
   `openpyxl` hanya diimpor di dalam `cmd_export` supaya perintah lain tetap ringan.
+- `fin/commands/batch.py`: entri JSON → argv → parser yang sama. Di dalam `db.batch()`, `write()` tidak membuka
+  transaksi sendiri dan `new_group()` mengembalikan group batch (restore digabung). `fin/commands/context.py`.
+- `COMMANDS.md` adalah kontrak untuk bot. Contohnya dijalankan sungguhan: setelah mengubah perilaku, pesan, atau
+  opsi, jalankan `.venv\Scripts\python tools\commands_doc.py`, periksa diff COMMANDS.md, lalu tes.
+  `tests/test_commands_doc.py` gagal jika ada perintah/opsi yang belum didokumentasikan atau output yang berubah.
 - `demo.py`: skenario dua bulan sebagai data (nominal integer); `tests/test_demo.py` memeriksa angkanya dari data itu.
 - `fin/recurring.py`: jatuh tempo tagihan rutin, `recompute_last_paid()` dari `recurring_payments`.
 - `delete`/`undo` lewat `_soft_delete` di `commands/transactions.py`: menghitung ulang status hutang dan `last_paid_month`.

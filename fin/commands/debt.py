@@ -203,7 +203,7 @@ def cmd_pay(args, conn):
     debt = _find(conn, args, require_open=True)
     rest = debts.remaining(conn, debt)
     if rest <= 0:
-        raise FinError("OVERPAYMENT", f"{debts.title(debt).capitalize()} (#{debt['id']}) sudah lunas.",
+        raise FinError("OVERPAYMENT", f"{debts.title(debt, cap=True)} (#{debt['id']}) sudah lunas.",
                        hint="Lihat daftar: debt list --status all")
     if args.amount.strip().lower() in ("all", "semua", "lunas"):
         amount = rest
@@ -236,7 +236,7 @@ def cmd_pay(args, conn):
     else:
         msg = f"{debt['person']} membayar piutang {rupiah(amount)}, masuk ke {acc_text}."
     if left == 0:
-        msg += f" {debts.title(debt).capitalize()} (#{debt['id']}) LUNAS."
+        msg += f" {debts.title(debt, cap=True)} (#{debt['id']}) LUNAS."
     else:
         msg += f" Sisa {debts.title(debt)} (#{debt['id']}) {rupiah(left)}."
     if ts[:10] != clock.today().isoformat():
@@ -310,7 +310,7 @@ def cmd_set(args, conn):
         changes.append(debts.due_text(due) or "tanpa jatuh tempo")
     if args.note is not None:
         changes.append(f"catatan: {note}" if note else "catatan dihapus")
-    msg = f"{debts.title(debt).capitalize()} (#{debt['id']}) diubah: {'; '.join(changes)}."
+    msg = f"{debts.title(debt, cap=True)} (#{debt['id']}) diubah: {'; '.join(changes)}."
     return success(msg, {"debt": debts.info(conn, debt)})
 
 
@@ -340,7 +340,7 @@ def cmd_remove(args, conn):
     tx_ids = [r[0] for r in conn.execute("SELECT id FROM transactions WHERE debt_id = ? ORDER BY id", (debt["id"],))]
     active = [r[0] for r in conn.execute(
         "SELECT id FROM transactions WHERE debt_id = ? AND deleted_at IS NULL ORDER BY id", (debt["id"],))]
-    label = f"{debts.title(debt).capitalize()} (#{debt['id']})"
+    label = f"{debts.title(debt, cap=True)} (#{debt['id']})"
     if tx_ids and rest > 0 and not args.write_off:
         ids = ", ".join(str(i) for i in active)
         target = f"--id {debt['id']}"

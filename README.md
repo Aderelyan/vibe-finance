@@ -39,7 +39,8 @@ kamu sendiri yang membaginya lewat `budget alloc`. Pengeluaran mengurangi budget
 - **Tahap 2 (selesai):** hutang piutang (`debt add/pay/list/set/rename/remove`) dan tagihan rutin
   (`recurring add/list/pay/set/rename/remove`).
 - **Tahap 3 (selesai):** `analyze`, `daily-check`, `export` (.xlsx), `demo.py`.
-- Belum ada: `COMMANDS.md` (tahap 4).
+- **Tahap 4 (selesai):** `context`, `batch`, dan [`COMMANDS.md`](COMMANDS.md): referensi lengkap setiap perintah,
+  opsi, contoh output asli, kode error, dan cara memetakan chat ke perintah.
 
 ## Demo
 
@@ -93,7 +94,12 @@ python finance.py recurring list
 python finance.py analyze --period this-month
 python finance.py daily-check --when pagi
 python finance.py export --period this-month
+
+python finance.py context
+python finance.py batch --file catatan.json
 ```
+
+Referensi lengkap semua perintah ada di [COMMANDS.md](COMMANDS.md).
 
 - `--item` berformat `catatan|jumlah|kategori`; kategori boleh dikosongkan (ditebak dari kata kunci, atau `lainnya`).
 - Nominal: `15000`, `15.000`, `15k`, `15rb`, `15 ribu`, `1,5jt`, `2 juta`, `Rp15.000`.
@@ -113,4 +119,10 @@ python finance.py export --period this-month
 
 ```bat
 .venv\Scripts\python -m pytest -q
+```
+
+Setelah mengubah perilaku atau pesan, perbarui contoh output di COMMANDS.md:
+
+```bat
+.venv\Scripts\python tools\commands_doc.py
 ```

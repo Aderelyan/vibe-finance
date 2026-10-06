@@ -272,8 +272,12 @@ SCHEMA_VERSION = max(MIGRATIONS)
 
 
 class Connection(sqlite3.Connection):
-    """Koneksi dengan penanda apakah database baru saja dibuat."""
+    """Koneksi dengan penanda apakah database baru saja dibuat, dan status batch.
+
+    batch_group: group_id bersama selama perintah batch berjalan (lihat batch()).
+    """
     created = False
+    batch_group = None
 
 
 def home():
@@ -373,7 +377,13 @@ def auto_backup(conn):
 
 @contextmanager
 def write(conn):
-    """Satu perintah tulis = satu transaksi database. Gagal di tengah = tidak ada yang tersimpan."""
+    """Satu perintah tulis = satu transaksi database. Gagal di tengah = tidak ada yang tersimpan.
+
+    Di dalam batch(), transaksi luar yang menentukan commit atau rollback.
+    """
+    if conn.batch_group is not None:
+        yield conn
+        return
     auto_backup(conn)
     conn.execute("BEGIN IMMEDIATE")
     try:
@@ -382,3 +392,20 @@ def write(conn):
     except BaseException:
         conn.execute("ROLLBACK")
         raise
+
+
+@contextmanager
+def batch(conn):
+    """Beberapa perintah tulis dalam satu transaksi database dan satu group_id (yang di-yield)."""
+    from .ledger import new_group
+    auto_backup(conn)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.batch_group = new_group(conn, "batch")
+        yield conn.batch_group
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.batch_group = None
