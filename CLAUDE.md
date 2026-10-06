@@ -24,6 +24,9 @@ riwayat perubahan spesifikasi ada di `docs\`.
 - `fin/ledger.py`: tulis transaksi, saldo dompet, `new_group()` (mencatat ke `op_groups` untuk urutan undo).
 - `fin/budgets.py`: saldo budget, `find()` (budget dari nama budget/kategori), pindahan, tutup budget.
 - `fin/report.py`: ringkasan per kategori. `fin/debts.py`: sisa dan status hutang, `find()` dari `--person`/`--id`.
+- `fin/analysis.py`: fakta `analyze` (periode sebelumnya, harian, proyeksi). `fin/export.py`: workbook .xlsx;
+  `openpyxl` hanya diimpor di dalam `cmd_export` supaya perintah lain tetap ringan.
+- `demo.py`: skenario dua bulan sebagai data (nominal integer); `tests/test_demo.py` memeriksa angkanya dari data itu.
 - `fin/recurring.py`: jatuh tempo tagihan rutin, `recompute_last_paid()` dari `recurring_payments`.
 - `delete`/`undo` lewat `_soft_delete` di `commands/transactions.py`: menghitung ulang status hutang dan `last_paid_month`.
   `op_groups.restore` berisi `[tabel, id]` (aktifkan lagi saat undo) atau `[tabel, id, 1]` (arsipkan saat undo).

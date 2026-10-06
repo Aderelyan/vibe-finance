@@ -167,7 +167,7 @@ class Period:
                 "end": self.end.isoformat(), "text": self.text}
 
 
-def _add_months(d, n):
+def add_months(d, n):
     m = d.month - 1 + n
     y = d.year + m // 12
     m = m % 12 + 1
@@ -235,6 +235,6 @@ def parse_period(period=None, date_from=None, date_to=None, earliest=None):
         n = int(m.group(1))
         if not 1 <= n <= 120:
             raise FinError("BAD_PERIOD", "Nilai N pada last:N harus 1 sampai 120.", hint=PERIOD_HINT)
-        start = _add_months(today.replace(day=1), -(n - 1))
+        start = add_months(today.replace(day=1), -(n - 1))
         return Period(p, f"{n} bulan terakhir", start, today)
     raise FinError("BAD_PERIOD", f"Periode '{period}' tidak dikenal.", hint=PERIOD_HINT)

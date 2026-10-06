@@ -72,6 +72,7 @@ vibe-finance\
     debts.py            # sisa hutang piutang, pilih hutang dari --person/--id
     recurring.py        # jatuh tempo dan bulan terbayar tagihan rutin
     report.py
+    analysis.py         # fakta untuk analyze
     export.py
     commands\           # satu file per kelompok perintah
   tests\
@@ -361,9 +362,9 @@ Output selalu satu objek JSON di stdout, tidak ada teks lain:
 | `recurring list [--all]` | Status bulan berjalan tiap tagihan, total per bulan, total yang belum dibayar. |
 | `recurring pay <nama> [--amount] [--account] [--budget] [--date] [--month] [--raw]` | Catat pembayaran sebagai pengeluaran dan perbarui `last_paid_month`. |
 | `recurring set <nama> [--amount] [--day] [--category] [--account]` / `rename <nama> <baru>` / `remove <nama>` | Kelola tagihan rutin. |
-| `analyze --period ...` | Lihat bagian 8. (Tahap 3) |
-| `export --period ... [--out]` | Buat .xlsx di `data\exports`. Kembalikan path file di `data.path`. (Tahap 3) |
-| `daily-check --when pagi\|malam` | Lihat bagian 8. (Tahap 3) |
+| `analyze --period ...` | Lihat bagian 8. |
+| `export --period ... [--out]` | Buat .xlsx di `data\exports`. Kembalikan path file di `data.path`. |
+| `daily-check --when pagi\|malam` | Lihat bagian 8. |
 | `backup` | Backup manual. |
 
 ## 8. Analisis, pengecekan harian, ekspor
@@ -382,12 +383,19 @@ Output selalu satu objek JSON di stdout, tidak ada teks lain:
 
 `message` berisi ringkasan 5 sampai 8 baris yang bisa dibaca sendiri. Hindari pembagian dengan nol saat periode kosong atau pemasukan nol.
 
+Detail perhitungan (`fin/analysis.py`):
+- Periode sebelumnya: jika periode mulai tanggal 1, dibandingkan per bulan kalender dengan jumlah bulan yang sama (1–6 Oktober dengan 1–6 September; September penuh dengan Agustus penuh; `last:3` dengan tiga bulan sebelumnya). Selain itu digeser sejumlah hari periode. Persen perubahan `null` jika periode sebelumnya nol.
+- Rasio menabung = selisih / pemasukan, `null` jika pemasukan nol. Rata-rata harian dan proyeksi dibulatkan ke rupiah terdekat dengan aritmetika integer.
+- Pengeluaran kecil yang sering: catatan dibandingkan tanpa peka huruf besar kecil dan spasi berlebih.
+- Proyeksi hanya untuk `this-month` (periode 1 bulan berjalan sampai hari ini): rata-rata harian × jumlah hari bulan itu.
+- Jatuh tempo dalam 7 hari termasuk yang sudah lewat.
+
 **`daily-check`** disiapkan untuk dipanggil penjadwal nanti. Backend hanya menyediakan perintahnya.
-- `pagi`: tagihan rutin yang belum dibayar dan hutang yang jatuh tempo dalam 3 hari.
-- `malam`: jika hari ini belum ada transaksi, pengingat singkat. Jika ada, total pengeluaran hari ini.
+- `pagi`: tagihan rutin bulan berjalan yang belum dibayar dan jatuh temponya paling lambat 3 hari lagi (termasuk yang sudah lewat), dan hutang/piutang terbuka yang jatuh tempo paling lambat 3 hari lagi (termasuk yang lewat).
+- `malam`: jika hari ini belum ada transaksi, pengingat singkat. Jika ada, total pengeluaran hari ini. Selalu `send: true`.
 - Jika tidak ada yang perlu disampaikan: `"data": {"send": false}`. Jika ada: `"send": true`.
 
-**`export`** (`openpyxl`): sheet Transaksi, Ringkasan per kategori, Saldo dompet, Budget, Hutang piutang. Header tebal dan dibekukan, kolom nominal berformat angka, lebar kolom disesuaikan.
+**`export`** (`openpyxl`, hanya dimuat saat ekspor): sheet Transaksi (periode itu), Ringkasan per kategori (periode itu), Saldo dompet (saat ini), Budget (saldo saat ini dan pengeluaran periode itu), Hutang piutang (yang tidak dihapus). Header tebal dan dibekukan, kolom nominal berformat angka, lebar kolom disesuaikan. Nama bawaan `data\exports\keuangan-<periode>-<YYYYMMDD-HHMMSS>.xlsx`; `--out` harus berakhiran `.xlsx`. File yang sedang dibuka Excel menghasilkan `BAD_ARGS` dengan hint.
 
 ## 9. Pengujian
 
@@ -410,7 +418,7 @@ Output selalu satu objek JSON di stdout, tidak ada teks lain:
 - Tagihan rutin: bayar, bayar dua kali ditolak, `--month`, undo/hapus pembayaran mengembalikan `last_paid_month`, tanggal 31, dompet/kategori yang dihapus.
 - Migrasi dari database versi 2.
 - Dompet, kategori, atau budget tidak dikenal menghasilkan error dengan `hint`, tanpa mengubah data.
-- `analyze` pada periode kosong tidak error. (Tahap 3)
+- `analyze` pada periode kosong tidak error; periode sebelumnya, rata-rata, pengeluaran kecil, budget minus, proyeksi. `daily-check` pagi dan malam. `export` (sheet, header, format angka, `--out`).
 - Setiap perintah, termasuk saat argumen salah, mengeluarkan JSON yang sah.
 
 **`demo.py`**: script yang membuat database baru di folder sementara, menjalankan skenario dua bulan (kira-kira 40 transaksi, dua dompet, alokasi budget, satu tabungan, satu hutang, satu piutang), lalu mencetak hasil `balance`, `report`, `budget list`, `savings list`, `debt list`, dan `analyze`. Angka akhir di demo harus diperiksa juga oleh sebuah tes.
@@ -433,7 +441,7 @@ Output selalu satu objek JSON di stdout, tidak ada teks lain:
 | Pengeluaran bulan ini | `report --period this-month --type expense` |
 | Pengeluaran Agustus | `report --period 2026-08 --type expense` |
 | Pengeluaran 3 bulan terakhir | `report --period last:3 --type expense` |
-| Analisis pengeluaran | `analyze --period this-month` (Tahap 3) |
+| Analisis pengeluaran | `analyze --period this-month` |
 | Tarik tunai 200k, admin 2.5k | `transfer --from bri --to tunai --amount 200k --fee 2.5k` |
 | Tambah dompet gopay isi 50k | `account add gopay --type ewallet --opening 50k` |
 | Hapus dompet gopay, sisanya ke bri | `account remove gopay --move-to bri` |
@@ -446,7 +454,7 @@ Output selalu satu objek JSON di stdout, tidak ada teks lain:
 | Bayar kos bulan ini | `recurring pay kos` |
 | Saldo BRI sebenarnya 450k | `adjust --account bri --actual 450k` |
 | Batalkan yang terakhir | `undo` |
-| Ekspor bulan ini | `export --period this-month` (Tahap 3) |
+| Ekspor bulan ini | `export --period this-month` |
 
 ## 10. Tahapan kerja
 
@@ -459,7 +467,7 @@ Pengguna membuat dompet, kategori, budget, dan tabungannya sendiri lewat perinta
 **Tahap 2: Hutang dan tagihan rutin.** (selesai) `debt` dan `recurring` dengan pola kustomisasi yang sama (tambah, ganti nama, hapus, daftar), beserta tesnya.
 Checkpoint: beri pengguna sekitar 10 perintah terminal untuk dicoba sendiri, lengkap dengan hasil yang seharusnya muncul.
 
-**Tahap 3: Analisis dan ekspor.** `analyze`, `daily-check`, `export`, `demo.py`.
+**Tahap 3: Analisis dan ekspor.** (selesai) `analyze`, `daily-check`, `export`, `demo.py`.
 Checkpoint: pengguna menjalankan `python demo.py` dan membuka file Excel hasil ekspor.
 
 **Tahap 4: Dokumentasi serah terima.** Tulis `COMMANDS.md`: setiap perintah dengan semua opsinya, satu contoh pemanggilan, contoh output sukses, dan error yang mungkin muncul. Dokumen ini akan menjadi dasar integrasi dengan bot AI nanti, jadi harus lengkap dan cocok persis dengan perilaku kode. Buat tes yang memastikan setiap perintah di `COMMANDS.md` memang ada di CLI.

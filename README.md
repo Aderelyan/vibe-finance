@@ -38,7 +38,18 @@ kamu sendiri yang membaginya lewat `budget alloc`. Pengeluaran mengurangi budget
   hapus dan ganti nama untuk dompet/kategori/tabungan, repo GitHub.
 - **Tahap 2 (selesai):** hutang piutang (`debt add/pay/list/set/rename/remove`) dan tagihan rutin
   (`recurring add/list/pay/set/rename/remove`).
-- Belum ada: `analyze`, `daily-check`, `export`, `demo.py` (tahap 3), `COMMANDS.md` (tahap 4).
+- **Tahap 3 (selesai):** `analyze`, `daily-check`, `export` (.xlsx), `demo.py`.
+- Belum ada: `COMMANDS.md` (tahap 4).
+
+## Demo
+
+```bat
+python demo.py
+```
+
+Membuat database baru di folder sementara, menjalankan skenario Agustus-September 2026 (dua dompet, gaji, alokasi
+budget, tabungan, tagihan rutin, hutang, piutang, sekitar 45 transaksi), lalu mencetak saldo, laporan, budget,
+tabungan, hutang, tagihan, analisis, dan path file Excel hasil ekspor. Data aslimu di `data\` tidak disentuh.
 
 ## Contoh pemakaian
 
@@ -78,6 +89,10 @@ python finance.py debt list
 python finance.py recurring add kos --amount 500k --day 5 --account bri
 python finance.py recurring pay kos
 python finance.py recurring list
+
+python finance.py analyze --period this-month
+python finance.py daily-check --when pagi
+python finance.py export --period this-month
 ```
 
 - `--item` berformat `catatan|jumlah|kategori`; kategori boleh dikosongkan (ditebak dari kata kunci, atau `lainnya`).
