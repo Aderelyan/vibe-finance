@@ -37,8 +37,8 @@ def test_migrate_v1_to_v2(fin_home):
     home, fin = fin_home
     make_v1(home / "finance.db")
     r = fin.ok("init")
-    assert r["data"]["schema_version"] == 2 and r["data"]["created"] is False
-    assert any(p.name.endswith("pre-v2.db") for p in (home / "backups").iterdir())
+    assert r["data"]["schema_version"] == db.SCHEMA_VERSION and r["data"]["created"] is False
+    assert any(p.name.endswith(f"pre-v{db.SCHEMA_VERSION}.db") for p in (home / "backups").iterdir())
 
     accounts = {a["name"]: a for a in fin.ok("account", "list")["data"]["accounts"]}
     assert accounts["tabungan"]["type"] == "bank" and accounts["celengan"]["type"] == "bank"
@@ -72,4 +72,31 @@ def test_migrate_v1_to_v2(fin_home):
     conn = sqlite3.connect(home / "finance.db")
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     assert conn.execute("SELECT sql FROM sqlite_master WHERE name='accounts'").fetchone()[0].count("savings") == 0
+    conn.close()
+
+
+def test_migrate_v2_to_v3(fin_home):
+    """Tagihan rutin lama (kolom active) dan hutang lama ikut terbawa."""
+    home, fin = fin_home
+    conn = sqlite3.connect(home / "finance.db", isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    conn.execute("BEGIN")
+    db.MIGRATIONS[1](conn)
+    db.MIGRATIONS[2](conn)
+    db.set_meta(conn, "schema_version", 2)
+    conn.execute("INSERT INTO accounts(id, name, type, is_default, created_at) VALUES (1, 'tunai', 'cash', 1, ?)", (T,))
+    conn.execute("INSERT INTO recurring(name, amount, day_of_month, active) VALUES ('kos', 500000, 5, 1)")
+    conn.execute("INSERT INTO recurring(name, amount, day_of_month, active) VALUES ('gym', 100000, 1, 0)")
+    conn.execute("INSERT INTO debts(direction, person, principal, created_at) VALUES ('i_owe', 'Budi', 50000, ?)", (T,))
+    conn.execute("COMMIT")
+    conn.close()
+
+    assert fin.ok("init")["data"]["schema_version"] == 3
+    assert any(p.name.endswith("pre-v3.db") for p in (home / "backups").iterdir())
+    items = {r["name"]: r for r in fin.ok("recurring", "list", "--all")["data"]["recurring"]}
+    assert items["kos"]["archived"] is False and items["gym"]["archived"] is True
+    assert fin.ok("debt", "list")["data"]["debts"][0]["person"] == "Budi"
+    fin.ok("recurring", "pay", "kos")
+    conn = sqlite3.connect(home / "finance.db")
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     conn.close()

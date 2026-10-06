@@ -36,7 +36,9 @@ kamu sendiri yang membaginya lewat `budget alloc`. Pengeluaran mengurangi budget
   `edit`, `delete`, `undo`, `backup`.
 - **Tahap 1.5 (selesai):** budget amplop (`budget list/alloc/move/close/history`), tabungan (`savings`),
   hapus dan ganti nama untuk dompet/kategori/tabungan, repo GitHub.
-- Belum ada: `debt`, `recurring` (tahap 2), `analyze`, `daily-check`, `export`, `demo.py` (tahap 3), `COMMANDS.md` (tahap 4).
+- **Tahap 2 (selesai):** hutang piutang (`debt add/pay/list/set/rename/remove`) dan tagihan rutin
+  (`recurring add/list/pay/set/rename/remove`).
+- Belum ada: `analyze`, `daily-check`, `export`, `demo.py` (tahap 3), `COMMANDS.md` (tahap 4).
 
 ## Contoh pemakaian
 
@@ -66,6 +68,16 @@ python finance.py undo
 python finance.py account remove gopay --move-to bri
 python finance.py category add kucing --kind expense
 python finance.py category remove hiburan --kind expense
+
+python finance.py debt add --direction i_owe --person Budi --amount 50k --due 2026-10-20
+python finance.py debt add --direction owed_to_me --person Andi --amount 100k
+python finance.py debt pay --person Budi --amount 20k
+python finance.py debt pay --person Andi --amount all
+python finance.py debt list
+
+python finance.py recurring add kos --amount 500k --day 5 --account bri
+python finance.py recurring pay kos
+python finance.py recurring list
 ```
 
 - `--item` berformat `catatan|jumlah|kategori`; kategori boleh dikosongkan (ditebak dari kata kunci, atau `lainnya`).
@@ -75,6 +87,9 @@ python finance.py category remove hiburan --kind expense
   atau `--from 2026-08-01 --to 2026-08-31`.
 - Tanggal transaksi: `--date 2026-10-05`, `--date yesterday`.
 - Hapus dompet yang masih berisi butuh `--move-to <dompet>` atau `--write-off`.
+- Hutang: `i_owe` = saya pinjam (uang masuk), `owed_to_me` = orang pinjam ke saya (uang keluar). Jika satu orang punya
+  beberapa hutang terbuka, sebutkan `--id` (lihat `debt list`). `--no-cash` = tanpa uang masuk/keluar dompet.
+- Tagihan rutin: `recurring pay` mencatat pengeluaran untuk bulan berjalan; `--month 2026-09` untuk bulan lain.
 - `python finance.py <perintah> --help` menampilkan semua opsi (juga dalam JSON).
 
 ## Tes

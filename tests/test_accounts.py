@@ -2,7 +2,7 @@ def test_init_is_idempotent(fin):
     again = fin.ok("init")
     assert again["data"]["created"] is False
     assert again["data"]["categories"] == 18
-    assert again["data"]["schema_version"] == 2
+    assert again["data"]["schema_version"] == 3
     cats = fin.ok("category", "list")["data"]["categories"]
     names = {(c["name"], c["kind"]) for c in cats}
     assert ("biaya admin", "expense") in names and ("gaji", "income") in names

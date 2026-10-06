@@ -224,7 +224,50 @@ def _migrate_v2(conn):
                      "(SELECT MIN(id) FROM accounts WHERE archived = 0)")
 
 
-MIGRATIONS = {1: _migrate_v1, 2: _migrate_v2}
+SCHEMA_V3 = """
+ALTER TABLE debts ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE recurring_v3 (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  amount INTEGER NOT NULL CHECK (amount > 0),
+  category_id INTEGER REFERENCES categories(id),
+  account_id INTEGER REFERENCES accounts(id),
+  day_of_month INTEGER NOT NULL CHECK (day_of_month BETWEEN 1 AND 31),
+  last_paid_month TEXT,
+  archived INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+)
+"""
+
+SCHEMA_V3_PAYMENTS = """
+CREATE TABLE recurring_payments (
+  id INTEGER PRIMARY KEY,
+  recurring_id INTEGER NOT NULL REFERENCES recurring(id),
+  tx_id INTEGER NOT NULL UNIQUE REFERENCES transactions(id),
+  month TEXT NOT NULL                -- 'YYYY-MM', bulan tagihan yang dibayar
+);
+CREATE INDEX idx_recpay_recurring ON recurring_payments(recurring_id)
+"""
+
+
+def _migrate_v3(conn):
+    """Hutang bisa diarsipkan; tagihan rutin memakai kolom archived dan tabel recurring_payments
+    (pembayaran per bulan, supaya last_paid_month bisa dihitung ulang setelah undo/delete)."""
+    for stmt in SCHEMA_V3.split(";"):
+        if stmt.strip():
+            conn.execute(stmt)
+    conn.execute("INSERT INTO recurring_v3(id, name, amount, category_id, account_id, day_of_month, "
+                 "last_paid_month, archived, created_at) SELECT id, name, amount, category_id, account_id, "
+                 "day_of_month, last_paid_month, 1 - active, ? FROM recurring", (clock.now_ts(),))
+    conn.execute("DROP TABLE recurring")
+    conn.execute("ALTER TABLE recurring_v3 RENAME TO recurring")
+    for stmt in SCHEMA_V3_PAYMENTS.split(";"):
+        if stmt.strip():
+            conn.execute(stmt)
+
+
+MIGRATIONS = {1: _migrate_v1, 2: _migrate_v2, 3: _migrate_v3}
 SCHEMA_VERSION = max(MIGRATIONS)
 
 

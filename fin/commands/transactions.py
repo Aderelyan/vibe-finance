@@ -1,7 +1,7 @@
 """add / transfer / adjust / edit / delete / undo"""
 import json
 
-from .. import budgets, clock, debts, resolve
+from .. import budgets, clock, debts, recurring, resolve
 from ..db import UNALLOCATED, write
 from ..ledger import (TX_SELECT, balance, balance_sentence, get_tx, insert_tx, new_group, tx_dict, tx_line)
 from ..output import FinError, fmt_date, fmt_ts, rupiah, signed_rupiah, success
@@ -331,6 +331,8 @@ def _soft_delete(conn, rows, moves=()):
         conn.execute("UPDATE budget_moves SET deleted_at = ? WHERE id = ?", (now, m["id"]))
     for debt_id in {r["debt_id"] for r in rows if r["debt_id"]}:
         debts.recompute_status(conn, debt_id)
+    for rec_id in recurring.ids_for_transactions(conn, [r["id"] for r in rows]):
+        recurring.recompute_last_paid(conn, rec_id)
 
 
 def cmd_delete(args, conn):
@@ -376,14 +378,17 @@ def cmd_undo(args, conn):
     moves = conn.execute(MOVE_SELECT + " WHERE m.group_id = ? AND m.deleted_at IS NULL ORDER BY m.id",
                          (gid,)).fetchall()
     restore = json.loads(group["restore"]) if group["restore"] else []
-    restored = []
+    restored, removed = [], []
     with write(conn):
         _soft_delete(conn, rows, moves)
-        for table, ref_id in restore:
-            assert table in ("accounts", "budgets", "categories")
-            conn.execute(f"UPDATE {table} SET archived = 0 WHERE id = ?", (ref_id,))
-            name = conn.execute(f"SELECT name FROM {table} WHERE id = ?", (ref_id,)).fetchone()["name"]
-            restored.append({"table": table, "id": ref_id, "name": name})
+        for entry in restore:
+            # [tabel, id] = aktifkan lagi; [tabel, id, 1] = arsipkan (mis. hutang yang dibuat oleh group ini)
+            table, ref_id, archived = (entry + [0])[:3]
+            assert table in ("accounts", "budgets", "categories", "debts")
+            conn.execute(f"UPDATE {table} SET archived = ? WHERE id = ?", (archived, ref_id))
+            ref = conn.execute(f"SELECT * FROM {table} WHERE id = ?", (ref_id,)).fetchone()
+            name = debts.title(ref) if table == "debts" else ref["name"]
+            (removed if archived else restored).append({"table": table, "id": ref_id, "name": name})
             if table == "accounts" and not conn.execute(
                     "SELECT 1 FROM accounts WHERE is_default = 1 AND archived = 0").fetchone():
                 conn.execute("UPDATE accounts SET is_default = 1 WHERE id = ?", (ref_id,))
@@ -393,10 +398,13 @@ def cmd_undo(args, conn):
         msg = f"Dibatalkan: {lines[0]}."
     else:
         msg = f"Dibatalkan {len(lines)} catatan dari pencatatan terakhir:\n" + "\n".join(f"- {x}" for x in lines) + "\n"
+    label = {"accounts": "dompet ", "budgets": "budget ", "categories": "kategori ", "debts": ""}
     if restored:
-        label = {"accounts": "dompet", "budgets": "budget", "categories": "kategori"}
         msg = msg.rstrip("\n") + " Diaktifkan kembali: " + \
-            ", ".join(f"{label[r['table']]} {r['name']}" for r in restored) + "."
+            ", ".join(f"{label[r['table']]}{r['name']}" for r in restored) + "."
+    if removed:
+        msg = msg.rstrip("\n") + " Ikut dihapus: " + \
+            ", ".join(f"{label[r['table']]}{r['name']} (#{r['id']})" for r in removed) + "."
     tail = []
     if rows:
         tail.append(balance_sentence(conn, _accounts_of(rows)))
@@ -406,5 +414,5 @@ def cmd_undo(args, conn):
         tail.append(budgets.sentence(conn, bud_ids))
     msg = msg.rstrip("\n") + " " + " ".join(tail)
     return success(msg, {"group_id": gid, "action": group["action"], "undone": [r["id"] for r in rows],
-                         "undone_moves": [m["id"] for m in moves], "restored": restored,
+                         "undone_moves": [m["id"] for m in moves], "restored": restored, "removed": removed,
                          "transactions": [tx_dict(r) for r in rows]})

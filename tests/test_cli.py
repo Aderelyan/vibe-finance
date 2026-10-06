@@ -83,3 +83,33 @@ def test_required_scenarios(tmp_path):
     assert run("report", "--period", "last:3", "--type", "expense")["data"]["period"]["start"] == "2026-08-01"
     r = run("undo")
     assert r["data"]["undone"] and run("balance", "--account", "tunai")["data"]["balance"] > 0
+
+
+def test_required_debt_scenarios(tmp_path):
+    """Skenario wajib Tahap 2: pinjam dari Budi, Andi pinjam, bayar hutang Budi."""
+    run = lambda *a: run_subprocess(tmp_path, *a)  # noqa: E731
+    assert run("account", "add", "tunai", "--type", "cash", "--opening", "150k")["ok"]
+    r = run("debt", "add", "--direction", "i_owe", "--person", "Budi", "--amount", "50k")
+    assert r["data"]["balance_after"] == 200_000
+    r = run("debt", "add", "--direction", "owed_to_me", "--person", "Andi", "--amount", "100k")
+    assert r["data"]["balance_after"] == 100_000
+    r = run("debt", "pay", "--person", "Budi", "--amount", "20k")
+    assert r["data"]["remaining"] == 30_000 and r["data"]["balance_after"] == 80_000
+    bal = run("balance")["data"]
+    assert bal["debt_total"] == 30_000 and bal["receivable_total"] == 100_000
+    assert bal["net_worth"] == 80_000 + 100_000 - 30_000 and bal["consistent"] is True
+    r = run("recurring", "add", "kos", "--amount", "500k", "--day", "5")
+    assert r["ok"]
+    assert run("recurring", "pay", "kos", "--amount", "50k")["data"]["month"] == "2026-10"
+
+
+@pytest.mark.parametrize("args, code", [
+    (["debt", "add", "--direction", "pinjam", "--person", "Budi", "--amount", "5k"], "BAD_ARGS"),
+    (["debt", "pay", "--amount", "5k"], "BAD_ARGS"),
+    (["debt", "pay", "--id", "satu", "--amount", "5k"], "BAD_ARGS"),
+    (["recurring", "add", "kos", "--amount", "5k"], "BAD_ARGS"),
+    (["recurring", "pay"], "BAD_ARGS"),
+])
+def test_bad_debt_and_recurring_input_is_json(tmp_path, args, code):
+    obj = run_subprocess(tmp_path, *args)
+    assert obj["ok"] is False and obj["error"]["code"] == code

@@ -69,7 +69,8 @@ vibe-finance\
     output.py           # pembungkus JSON, format rupiah, kode error
     ledger.py           # tulis transaksi, saldo dompet, op_groups
     budgets.py          # saldo budget, cari/buat budget, pindahan
-    debts.py            # sisa hutang piutang
+    debts.py            # sisa hutang piutang, pilih hutang dari --person/--id
+    recurring.py        # jatuh tempo dan bulan terbayar tagihan rutin
     report.py
     export.py
     commands\           # satu file per kelompok perintah
@@ -87,7 +88,7 @@ Repo: `https://github.com/Aderelyan/vibe-finance.git` (publik), branch `main`. `
 
 ## 5. Skema database
 
-Versi skema saat ini: **2**. Migrasi berurutan berdasarkan `meta.schema_version`. Sebelum migrasi database yang sudah ada, dibuat backup `finance-YYYYMMDD-pre-vN.db`.
+Versi skema saat ini: **3**. Migrasi berurutan berdasarkan `meta.schema_version`. Sebelum migrasi database yang sudah ada, dibuat backup `finance-YYYYMMDD-pre-vN.db`.
 
 ```sql
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);          -- schema_version, last_backup_date
@@ -125,8 +126,9 @@ CREATE TABLE debts (
   principal INTEGER NOT NULL CHECK (principal > 0),
   due_date TEXT,
   note TEXT,
-  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','paid')),
-  created_at TEXT NOT NULL
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','paid')),   -- dihitung ulang dari pembayaran
+  created_at TEXT NOT NULL,
+  archived INTEGER NOT NULL DEFAULT 0      -- v3: 1 = dihapus tapi punya transaksi
 );
 
 CREATE TABLE budgets (
@@ -176,20 +178,30 @@ CREATE TABLE op_groups (
   id INTEGER PRIMARY KEY,
   group_id TEXT NOT NULL UNIQUE,
   action TEXT NOT NULL,             -- add, transfer, adjust, opening, budget_alloc, budget_move, ...
-  restore TEXT,                     -- JSON [[tabel, id], ...] yang diaktifkan lagi jika di-undo
+  restore TEXT,                     -- JSON [[tabel, id], ...] diaktifkan lagi jika di-undo;
+                                    -- [tabel, id, 1] justru diarsipkan (hutang yang dibuat group itu)
   undoable INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL
 );
 
-CREATE TABLE recurring (
+CREATE TABLE recurring (            -- v3: dibangun ulang, kolom active diganti archived
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  amount INTEGER NOT NULL,
+  amount INTEGER NOT NULL CHECK (amount > 0),
   category_id INTEGER REFERENCES categories(id),
-  account_id INTEGER REFERENCES accounts(id),
+  account_id INTEGER REFERENCES accounts(id),       -- NULL = dompet default saat dibayar
   day_of_month INTEGER NOT NULL CHECK (day_of_month BETWEEN 1 AND 31),
-  last_paid_month TEXT,             -- 'YYYY-MM'
-  active INTEGER NOT NULL DEFAULT 1
+  last_paid_month TEXT,             -- 'YYYY-MM', selalu dihitung ulang dari recurring_payments
+  archived INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
+-- v3: satu baris per pembayaran tagihan rutin; bulan tagihan bisa berbeda dari tanggal bayar
+CREATE TABLE recurring_payments (
+  id INTEGER PRIMARY KEY,
+  recurring_id INTEGER NOT NULL REFERENCES recurring(id),
+  tx_id INTEGER NOT NULL UNIQUE REFERENCES transactions(id),
+  month TEXT NOT NULL               -- 'YYYY-MM'
 );
 ```
 
@@ -201,6 +213,8 @@ Data awal saat database dibuat:
 - Dompet dan tabungan: tidak dibuat otomatis. Pengguna membuatnya sendiri lewat perintah.
 
 **Migrasi v1 → v2**: tabel `budgets` lama dibuang dan dibuat ulang, `budget_moves` dan `op_groups` dibuat, `transactions.budget_id` ditambah. Semua transaksi lama selain transfer diarahkan ke `belum teralokasi`. Dompet bertipe `savings` diubah menjadi `bank`, lalu dibuat tabungan bernama dan bertarget sama, dan uang sebesar saldo dompet itu dipindah dari `belum teralokasi` ke tabungan tersebut (pindahan ini tidak bisa di-undo).
+
+**Migrasi v2 → v3**: `debts.archived` ditambah. Tabel `recurring` dibangun ulang (`archived = 1 - active`, `amount > 0`, `created_at`), lalu `recurring_payments` dibuat.
 
 Aktifkan `PRAGMA foreign_keys = ON`. Setiap perintah tulis berjalan dalam satu transaksi database, supaya tidak ada data setengah tersimpan.
 
@@ -232,7 +246,7 @@ Uang yang sama dilihat dari dua sisi: **dompet** (uangnya ada di mana) dan **bud
 6. Budget boleh minus. `message` wajib memberi peringatan ("Budget makan minus Rp5.000"), begitu juga jika `belum teralokasi` minus (alokasi melebihi uang yang ada).
 7. Setiap `add` pengeluaran menampilkan sisa budget yang terpakai di `message`, di samping sisa dompet.
 8. Biaya admin tetap pengeluaran kategori `biaya admin`.
-9. Hutang piutang (Tahap 2): uang masuk menambah `belum teralokasi`. Uang keluar mengurangi `belum teralokasi`, kecuali diberi `--budget`.
+9. Hutang piutang: uang masuk menambah `belum teralokasi` (`--budget` ditolak). Uang keluar mengurangi `belum teralokasi`, kecuali diberi `--budget`.
 10. Riwayat tidak ditulis ulang. Transaksi lama tetap tercatat pada budget yang berlaku saat dibuat.
 11. `edit` yang mengganti kategori memindahkan transaksi itu ke budget kategori barunya (atau `belum teralokasi`).
 12. `--budget <nama>` pada `add` dan `edit` pengeluaran memaksa pengeluaran diambil dari budget tertentu, termasuk tabungan.
@@ -259,9 +273,20 @@ Hapus kategori yang punya budget: budget itu ditutup dulu (sisa kembali ke `belu
 **Hutang piutang**:
 - `i_owe` (saya berhutang): saat dibuat, uang masuk = `debt_in`. Saat saya membayar = `debt_out`.
 - `owed_to_me` (orang berhutang ke saya): saat dibuat, uang keluar = `debt_out`. Saat dia membayar = `debt_in`.
-- Sisa = `principal` dikurangi total pembayaran. Pembayaran boleh sebagian. Pembayaran melebihi sisa ditolak. Saat sisa 0, status jadi `paid`. Jika pembayaran dihapus, status dihitung ulang.
-- Opsi `--no-cash` untuk hutang tanpa aliran uang (contoh: teman membayari makan). Hutang dicatat tanpa transaksi pembuka, dan pengeluarannya dicatat terpisah lewat `add`.
+- Sisa = `principal` dikurangi total pembayaran. Pembayaran boleh sebagian; `--amount all` melunasi sisanya. Pembayaran melebihi sisa ditolak (`OVERPAYMENT`). Saat sisa 0, status jadi `paid`. Jika pembayaran dihapus atau di-undo, status dihitung ulang. Nominal transaksi hutang tidak bisa diubah lewat `edit`.
+- Nama orang dicocokkan tanpa peka huruf besar kecil; hutang baru untuk orang yang sudah ada memakai ejaan yang sudah tercatat. `--person` memilih hutang yang masih terbuka; jika lebih dari satu, `AMBIGUOUS_DEBT` beserta daftar ID (`data.candidates`). `--direction` mempersempit pilihan.
+- Opsi `--no-cash` untuk hutang tanpa aliran uang: tidak ada transaksi pembuka, dompet dan budget tidak berubah. Contoh: piutang atas barang yang dulu sudah dicatat sebagai pengeluaran, atau teman membayari makan (pengeluarannya baru tercatat sebagai pembayaran hutang nanti). Jangan ditambah `add` pengeluaran untuk uang yang sama, karena nanti terhitung dua kali saat hutangnya dibayar.
+- `undo` setelah `debt add` (bukan `--no-cash`) membatalkan transaksi pembukanya dan menghapus (mengarsipkan) hutang itu.
+- `debt remove`: tanpa transaksi sama sekali = dihapus sungguhan. Sudah lunas = diarsipkan. Masih bersisa = `NOT_EMPTY` dengan pilihan `debt pay --amount all` atau `--write-off` (sisa dianggap selesai, diarsipkan, dompet dan budget tidak berubah). Hutang yang diarsipkan tidak dihitung di total hutang/piutang.
 - Budget: lihat aturan budget nomor 9.
+
+**Tagihan rutin**:
+- Jatuh tempo tiap bulan pada `day_of_month`; tanggal 29-31 di bulan yang lebih pendek menjadi akhir bulan.
+- `recurring add` tanpa `--category`: ditebak dari nama lewat kata kunci, jika tidak cocok memakai `tagihan` (atau `lainnya` jika `tagihan` dihapus). Tanpa `--account`: dompet default saat dibayar.
+- `recurring pay` mencatat satu `expense` (kategori dan budget mengikuti aturan pengeluaran biasa, `--budget` boleh), plus satu baris `recurring_payments`. Bulan tagihan = `--month`, atau bulan dari tanggal bayar. Membayar bulan yang sudah dibayar ditolak (`BAD_ARGS`).
+- `last_paid_month` = bulan terbesar dari pembayaran yang transaksinya masih aktif, dihitung ulang setelah `pay`, `delete`, dan `undo`.
+- Hapus: belum pernah dibayar = dihapus sungguhan; sudah pernah = diarsipkan. `recurring add` dengan nama yang diarsipkan mengaktifkannya kembali dengan nilai baru.
+- Dompet atau kategori tagihan yang sudah dihapus menghasilkan `UNKNOWN_ACCOUNT`/`UNKNOWN_CATEGORY` saat `pay`, dengan hint `recurring set`.
 
 **Total**: `balance` tanpa argumen menampilkan dua bagian. Per dompet: saldo tiap dompet dan total dompet. Per budget: `belum teralokasi`, budget kategori, tabungan, subtotal tabungan, subtotal di luar tabungan, total budget. Lalu total hutang, total piutang, dan kekayaan bersih (total + piutang − hutang). `data` memuat `total_dompet`, `total_budget`, dan `consistent`.
 
@@ -325,10 +350,16 @@ Output selalu satu objek JSON di stdout, tidak ada teks lain:
 | `savings add <nama> [--target] [--target-date]` | Buat tabungan, atau aktifkan kembali. |
 | `savings list` | Saldo, target, persen tercapai, kekurangan, perubahan bersih bulan ini, lalu total. |
 | `savings set-target <nama> [--target] [--target-date] [--clear]` / `savings rename` / `savings remove` | Kelola tabungan. |
-| `debt add --direction --person --amount [--account] [--budget] [--due] [--note] [--no-cash]` | Catat hutang atau piutang. (Tahap 2) |
-| `debt pay (--person \| --id) --amount [--account] [--budget] [--date]` | Catat pembayaran. Jika satu orang punya lebih dari satu hutang terbuka dan `--id` tidak diberikan, kembalikan `AMBIGUOUS_DEBT` beserta daftar ID. (Tahap 2) |
-| `debt list [--status] [--person]` / `debt rename` / `debt remove` | Daftar dengan sisa dan jatuh tempo; kelola dengan pola yang sama. (Tahap 2) |
-| `recurring add <nama> --amount --day [--category] [--account]` / `list` / `pay <nama>` / `rename` / `remove` | Tagihan rutin. `pay` mencatat pengeluarannya dan mengisi `last_paid_month`. (Tahap 2) |
+| `debt add --direction i_owe\|owed_to_me --person --amount [--account] [--budget] [--due] [--note] [--date] [--no-cash] [--raw]` | Catat hutang atau piutang. |
+| `debt pay (--person \| --id) [--direction] --amount\|all [--account] [--budget] [--date] [--note] [--raw]` | Catat pembayaran. Jika satu orang punya lebih dari satu hutang terbuka dan `--id` tidak diberikan, kembalikan `AMBIGUOUS_DEBT` beserta daftar ID. |
+| `debt list [--status open\|paid\|all] [--person] [--direction] [--all]` | Daftar dengan sisa dan jatuh tempo, total hutang dan piutang, yang jatuh tempo dalam 7 hari. |
+| `debt set (--person \| --id) [--direction] [--due \| --clear-due] [--note]` | Ubah jatuh tempo atau catatan. |
+| `debt rename <nama> <baru>` | Ganti nama orang di semua catatannya (digabung jika nama baru sudah ada). |
+| `debt remove (--person \| --id) [--direction] [--write-off]` | Hapus catatan. Lihat aturan hutang. |
+| `recurring add <nama> --amount --day [--category] [--account]` | Tambah tagihan rutin, atau aktifkan kembali. |
+| `recurring list [--all]` | Status bulan berjalan tiap tagihan, total per bulan, total yang belum dibayar. |
+| `recurring pay <nama> [--amount] [--account] [--budget] [--date] [--month] [--raw]` | Catat pembayaran sebagai pengeluaran dan perbarui `last_paid_month`. |
+| `recurring set <nama> [--amount] [--day] [--category] [--account]` / `rename <nama> <baru>` / `remove <nama>` | Kelola tagihan rutin. |
 | `analyze --period ...` | Lihat bagian 8. (Tahap 3) |
 | `export --period ... [--out]` | Buat .xlsx di `data\exports`. Kembalikan path file di `data.path`. (Tahap 3) |
 | `daily-check --when pagi\|malam` | Lihat bagian 8. (Tahap 3) |
@@ -374,7 +405,9 @@ Output selalu satu objek JSON di stdout, tidak ada teks lain:
 - `budget close` dan `savings remove` mengembalikan sisa dengan benar, termasuk sisa minus. `--budget` pada `add`, termasuk dari tabungan.
 - `account remove`: tanpa transaksi (hapus sungguhan), dengan transaksi (arsip), berisi tanpa opsi (`NOT_EMPTY`), `--move-to`, `--write-off`. `category remove` pada kategori yang punya budget dan pada kategori sistem (`SYSTEM_PROTECTED`). `adjust --actual 0`.
 - Migrasi dari database versi 1 yang berisi dompet `savings` dan beberapa transaksi.
-- Hutang: bayar sebagian, lunas, bayar berlebih ditolak, dua hutang untuk orang yang sama, `--no-cash`. (Tahap 2)
+- Hutang: bayar sebagian, lunas, bayar berlebih ditolak, dua hutang untuk orang yang sama, `--no-cash`, undo, hapus.
+- Tagihan rutin: bayar, bayar dua kali ditolak, `--month`, undo/hapus pembayaran mengembalikan `last_paid_month`, tanggal 31, dompet/kategori yang dihapus.
+- Migrasi dari database versi 2.
 - Dompet, kategori, atau budget tidak dikenal menghasilkan error dengan `hint`, tanpa mengubah data.
 - `analyze` pada periode kosong tidak error. (Tahap 3)
 - Setiap perintah, termasuk saat argumen salah, mengeluarkan JSON yang sah.
@@ -406,9 +439,10 @@ Output selalu satu objek JSON di stdout, tidak ada teks lain:
 | Kosongkan dompet tunai | `adjust --account tunai --actual 0` |
 | Tambah kategori "kucing" | `category add kucing --kind expense` |
 | Hapus kategori hiburan | `category remove hiburan --kind expense` |
-| Pinjam 50k dari Budi | `debt add --direction i_owe --person Budi --amount 50k` (Tahap 2) |
-| Andi pinjam 100k | `debt add --direction owed_to_me --person Andi --amount 100k` (Tahap 2) |
-| Bayar hutang Budi 20k | `debt pay --person Budi --amount 20k` (Tahap 2) |
+| Pinjam 50k dari Budi | `debt add --direction i_owe --person Budi --amount 50k` |
+| Andi pinjam 100k | `debt add --direction owed_to_me --person Andi --amount 100k` |
+| Bayar hutang Budi 20k | `debt pay --person Budi --amount 20k` |
+| Bayar kos bulan ini | `recurring pay kos` |
 | Saldo BRI sebenarnya 450k | `adjust --account bri --actual 450k` |
 | Batalkan yang terakhir | `undo` |
 | Ekspor bulan ini | `export --period this-month` (Tahap 3) |
@@ -421,7 +455,7 @@ Pengguna membuat dompet, kategori, budget, dan tabungannya sendiri lewat perinta
 
 **Tahap 1.5: Repo GitHub, kustomisasi penuh, budget amplop, tabungan.** (selesai) Lihat `docs\PERUBAHAN-01.md`.
 
-**Tahap 2: Hutang dan tagihan rutin.** `debt` dan `recurring` dengan pola kustomisasi yang sama (tambah, ganti nama, hapus, daftar), beserta tesnya.
+**Tahap 2: Hutang dan tagihan rutin.** (selesai) `debt` dan `recurring` dengan pola kustomisasi yang sama (tambah, ganti nama, hapus, daftar), beserta tesnya.
 Checkpoint: beri pengguna sekitar 10 perintah terminal untuk dicoba sendiri, lengkap dengan hasil yang seharusnya muncul.
 
 **Tahap 3: Analisis dan ekspor.** `analyze`, `daily-check`, `export`, `demo.py`.

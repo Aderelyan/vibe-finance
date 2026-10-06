@@ -11,10 +11,13 @@ ACCOUNTS = ["tunai", "tunai", "bri", "bri", "gopay", "dana"]
 CATEGORIES = ["makan", "jajan", "transport", "belanja", "hiburan", "kesehatan", "kucing", "biaya admin", "lainnya"]
 BUDGETS = CATEGORIES + ["belum teralokasi", "tabungan", "laptop", "liburan"]
 AMOUNTS = ["5k", "10k", "25rb", "50.000", "100k", "1,5jt"] * 3 + ["0", "abc", "-5k", "all"]
+PEOPLE = ["Budi", "budi", "Andi", "Citra"]
+BILLS = ["kos", "wifi", "listrik"]
 
 
 def random_command(rng, max_id):
     acc, acc2 = rng.sample(ACCOUNTS, 2)
+    person = rng.choice(PEOPLE)
     cat, bud, bud2 = rng.choice(CATEGORIES), rng.choice(BUDGETS), rng.choice(BUDGETS)
     amt = rng.choice(AMOUNTS)
     tx = str(rng.randint(max(1, max_id - 15), max_id + 1))
@@ -43,6 +46,16 @@ def random_command(rng, max_id):
         (1, ["category", "remove", cat, "--kind", "expense"]),
         (1, ["savings", "add", rng.choice(["tabungan", "laptop", "liburan"]), "--target", "1jt"]),
         (1, ["savings", "remove", rng.choice(["tabungan", "laptop", "liburan"])]),
+        (2, ["debt", "add", "--direction", rng.choice(["i_owe", "owed_to_me"]), "--person", person, "--amount", amt,
+             "--account", acc] + rng.choice([[], [], ["--budget", bud], ["--no-cash"]])),
+        (3, ["debt", "pay", "--person", person, "--amount", rng.choice(AMOUNTS + ["all"]), "--account", acc]
+         + rng.choice([[], [], ["--budget", bud], ["--direction", "i_owe"]])),
+        (1, ["debt", "remove", "--person", person] + rng.choice([[], ["--write-off"]])),
+        (1, ["recurring", "add", rng.choice(BILLS), "--amount", amt, "--day", str(rng.randint(1, 31)),
+             "--account", acc]),
+        (2, ["recurring", "pay", rng.choice(BILLS), "--month", rng.choice(["2026-08", "2026-09", "2026-10"])]
+         + rng.choice([[], ["--budget", bud], ["--account", acc]])),
+        (1, ["recurring", "remove", rng.choice(BILLS)]),
     ]
     weights = [w for w, _ in choices]
     return rng.choices([c for _, c in choices], weights=weights)[0]
@@ -59,10 +72,35 @@ def test_wallets_equal_budgets_after_random_commands(fin, seed):
         cmd = random_command(rng, max_id=fin.max_tx_id())
         obj = fin(*cmd)  # memeriksa aturan utama dari tabel
         ok_count += obj["ok"]
+        assert obj["ok"] or obj["error"]["code"] != "INTERNAL", (cmd, obj)
         if step % 25 == 0:
             data = fin.ok("balance")["data"] if fin.ok("account", "list")["data"]["accounts"] else None
             if data:
                 assert data["consistent"] is True and data["total_dompet"] == data["total_budget"]
-    assert ok_count > 120, "terlalu sedikit perintah yang berhasil, tes tidak bermakna"
+            check_debts_and_bills(fin)
+    assert ok_count > 100,"terlalu sedikit perintah yang berhasil, tes tidak bermakna"
     budgets = fin.ok("budget", "list")["data"]
     assert budgets["consistent"] is True
+    check_debts_and_bills(fin)
+    assert fin.ok("debt", "list", "--status", "all", "--all")["data"]["count"] > 0
+
+
+def check_debts_and_bills(fin):
+    """Status hutang dan last_paid_month selalu cocok dengan transaksi aktif."""
+    import sqlite3
+    conn = sqlite3.connect(fin.home / "finance.db")
+    try:
+        for debt_id, direction, principal, status in conn.execute(
+                "SELECT id, direction, principal, status FROM debts"):
+            pay_type = "debt_out" if direction == "i_owe" else "debt_in"
+            paid = conn.execute("SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE debt_id = ? AND type = ? "
+                                "AND deleted_at IS NULL", (debt_id, pay_type)).fetchone()[0]
+            assert 0 <= paid <= principal
+            assert status == ("paid" if paid == principal else "open")
+        for rec_id, last in conn.execute("SELECT id, last_paid_month FROM recurring"):
+            expected = conn.execute("SELECT MAX(p.month) FROM recurring_payments p JOIN transactions t "
+                                    "ON t.id = p.tx_id WHERE p.recurring_id = ? AND t.deleted_at IS NULL",
+                                    (rec_id,)).fetchone()[0]
+            assert last == expected
+    finally:
+        conn.close()

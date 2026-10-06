@@ -18,12 +18,15 @@ riwayat perubahan spesifikasi ada di `docs\`.
 ## Peta kode
 
 - `fin/cli.py`: parser (error argparse → JSON `BAD_ARGS`), opsi tersembunyi `--now`, penangkap `INTERNAL`.
-- `fin/db.py`: skema, migrasi via `meta.schema_version` (sekarang v2), `write(conn)` = satu transaksi DB + backup harian.
+- `fin/db.py`: skema, migrasi via `meta.schema_version` (sekarang v3), `write(conn)` = satu transaksi DB + backup harian.
 - `fin/parse.py`: `parse_amount`, `parse_date`, `parse_period`. Semua input nominal/tanggal/periode lewat sini.
 - `fin/resolve.py`: cari dompet/kategori dari nama atau alias; tebak kategori dari kata kunci.
 - `fin/ledger.py`: tulis transaksi, saldo dompet, `new_group()` (mencatat ke `op_groups` untuk urutan undo).
 - `fin/budgets.py`: saldo budget, `find()` (budget dari nama budget/kategori), pindahan, tutup budget.
-- `fin/report.py`: ringkasan per kategori. `fin/debts.py`: sisa hutang.
+- `fin/report.py`: ringkasan per kategori. `fin/debts.py`: sisa dan status hutang, `find()` dari `--person`/`--id`.
+- `fin/recurring.py`: jatuh tempo tagihan rutin, `recompute_last_paid()` dari `recurring_payments`.
+- `delete`/`undo` lewat `_soft_delete` di `commands/transactions.py`: menghitung ulang status hutang dan `last_paid_month`.
+  `op_groups.restore` berisi `[tabel, id]` (aktifkan lagi saat undo) atau `[tabel, id, 1]` (arsipkan saat undo).
 - `fin/commands/*.py`: satu modul per kelompok perintah, masing-masing punya `register(sub)`.
 
 ## Aturan kerja

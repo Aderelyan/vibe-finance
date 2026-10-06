@@ -19,7 +19,7 @@ def cmd_init(args, conn):
     else:
         msg = f"Database sudah ada di {path}. Tidak ada yang diubah."
     if n_acc == 0:
-        msg += " Belum ada dompet. Tambahkan dengan: account add <nama> --type cash|bank|ewallet|savings --opening <saldo>."
+        msg += " Belum ada dompet. Tambahkan dengan: account add <nama> --type cash|bank|ewallet --opening <saldo>."
     return success(msg, {"path": path, "created": conn.created, "schema_version": db.schema_version(conn),
                          "accounts": n_acc, "categories": n_cat})
 
