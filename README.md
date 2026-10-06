@@ -88,7 +88,9 @@ python finance.py recurring list
 - Tanggal transaksi: `--date 2026-10-05`, `--date yesterday`.
 - Hapus dompet yang masih berisi butuh `--move-to <dompet>` atau `--write-off`.
 - Hutang: `i_owe` = saya pinjam (uang masuk), `owed_to_me` = orang pinjam ke saya (uang keluar). Jika satu orang punya
-  beberapa hutang terbuka, sebutkan `--id` (lihat `debt list`). `--no-cash` = tanpa uang masuk/keluar dompet.
+  beberapa hutang terbuka, sebutkan `--id` (lihat `debt list`). `--paid-for "makan siang|makan"` = orang itu
+  membayari sesuatu untukmu (hutang + pengeluaran sekaligus, saldo dompet tetap). `--no-cash` = tanpa uang
+  masuk/keluar dompet, untuk hutang lama yang sudah termasuk di saldo awal.
 - Tagihan rutin: `recurring pay` mencatat pengeluaran untuk bulan berjalan; `--month 2026-09` untuk bulan lain.
 - `python finance.py <perintah> --help` menampilkan semua opsi (juga dalam JSON).
 

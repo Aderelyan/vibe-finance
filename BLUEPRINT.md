@@ -275,7 +275,8 @@ Hapus kategori yang punya budget: budget itu ditutup dulu (sisa kembali ke `belu
 - `owed_to_me` (orang berhutang ke saya): saat dibuat, uang keluar = `debt_out`. Saat dia membayar = `debt_in`.
 - Sisa = `principal` dikurangi total pembayaran. Pembayaran boleh sebagian; `--amount all` melunasi sisanya. Pembayaran melebihi sisa ditolak (`OVERPAYMENT`). Saat sisa 0, status jadi `paid`. Jika pembayaran dihapus atau di-undo, status dihitung ulang. Nominal transaksi hutang tidak bisa diubah lewat `edit`.
 - Nama orang dicocokkan tanpa peka huruf besar kecil; hutang baru untuk orang yang sudah ada memakai ejaan yang sudah tercatat. `--person` memilih hutang yang masih terbuka; jika lebih dari satu, `AMBIGUOUS_DEBT` beserta daftar ID (`data.candidates`). `--direction` mempersempit pilihan.
-- Opsi `--no-cash` untuk hutang tanpa aliran uang: tidak ada transaksi pembuka, dompet dan budget tidak berubah. Contoh: piutang atas barang yang dulu sudah dicatat sebagai pengeluaran, atau teman membayari makan (pengeluarannya baru tercatat sebagai pembayaran hutang nanti). Jangan ditambah `add` pengeluaran untuk uang yang sama, karena nanti terhitung dua kali saat hutangnya dibayar.
+- Opsi `--paid-for "catatan|kategori"` (khusus `i_owe`, kategori opsional dan ditebak seperti `add`): orang lain membayari sesuatu untuk saya. Dalam satu group dicatat `debt_in` ke `belum teralokasi` dan `expense` sebesar sama dari dompet yang sama ke budget kategorinya. Saldo dompet tidak berubah, pengeluarannya muncul di laporan, budget kategorinya terpotong. `undo` membatalkan keduanya dan menghapus hutangnya.
+- Opsi `--no-cash` untuk hutang tanpa aliran uang: tidak ada transaksi pembuka, dompet dan budget tidak berubah. Dipakai untuk hutang lama yang uangnya sudah termasuk di saldo awal. Tidak boleh digabung dengan `--paid-for`, `--account`, `--budget`, atau `--date`.
 - `undo` setelah `debt add` (bukan `--no-cash`) membatalkan transaksi pembukanya dan menghapus (mengarsipkan) hutang itu.
 - `debt remove`: tanpa transaksi sama sekali = dihapus sungguhan. Sudah lunas = diarsipkan. Masih bersisa = `NOT_EMPTY` dengan pilihan `debt pay --amount all` atau `--write-off` (sisa dianggap selesai, diarsipkan, dompet dan budget tidak berubah). Hutang yang diarsipkan tidak dihitung di total hutang/piutang.
 - Budget: lihat aturan budget nomor 9.
@@ -350,7 +351,7 @@ Output selalu satu objek JSON di stdout, tidak ada teks lain:
 | `savings add <nama> [--target] [--target-date]` | Buat tabungan, atau aktifkan kembali. |
 | `savings list` | Saldo, target, persen tercapai, kekurangan, perubahan bersih bulan ini, lalu total. |
 | `savings set-target <nama> [--target] [--target-date] [--clear]` / `savings rename` / `savings remove` | Kelola tabungan. |
-| `debt add --direction i_owe\|owed_to_me --person --amount [--account] [--budget] [--due] [--note] [--date] [--no-cash] [--raw]` | Catat hutang atau piutang. |
+| `debt add --direction i_owe\|owed_to_me --person --amount [--account] [--budget] [--due] [--note] [--date] [--no-cash \| --paid-for "catatan\|kategori"] [--raw]` | Catat hutang atau piutang. |
 | `debt pay (--person \| --id) [--direction] --amount\|all [--account] [--budget] [--date] [--note] [--raw]` | Catat pembayaran. Jika satu orang punya lebih dari satu hutang terbuka dan `--id` tidak diberikan, kembalikan `AMBIGUOUS_DEBT` beserta daftar ID. |
 | `debt list [--status open\|paid\|all] [--person] [--direction] [--all]` | Daftar dengan sisa dan jatuh tempo, total hutang dan piutang, yang jatuh tempo dalam 7 hari. |
 | `debt set (--person \| --id) [--direction] [--due \| --clear-due] [--note]` | Ubah jatuh tempo atau catatan. |
@@ -405,7 +406,7 @@ Output selalu satu objek JSON di stdout, tidak ada teks lain:
 - `budget close` dan `savings remove` mengembalikan sisa dengan benar, termasuk sisa minus. `--budget` pada `add`, termasuk dari tabungan.
 - `account remove`: tanpa transaksi (hapus sungguhan), dengan transaksi (arsip), berisi tanpa opsi (`NOT_EMPTY`), `--move-to`, `--write-off`. `category remove` pada kategori yang punya budget dan pada kategori sistem (`SYSTEM_PROTECTED`). `adjust --actual 0`.
 - Migrasi dari database versi 1 yang berisi dompet `savings` dan beberapa transaksi.
-- Hutang: bayar sebagian, lunas, bayar berlebih ditolak, dua hutang untuk orang yang sama, `--no-cash`, undo, hapus.
+- Hutang: bayar sebagian, lunas, bayar berlebih ditolak, dua hutang untuk orang yang sama, `--no-cash`, `--paid-for` (saldo tetap, pengeluaran di laporan, undo sekaligus), undo, hapus.
 - Tagihan rutin: bayar, bayar dua kali ditolak, `--month`, undo/hapus pembayaran mengembalikan `last_paid_month`, tanggal 31, dompet/kategori yang dihapus.
 - Migrasi dari database versi 2.
 - Dompet, kategori, atau budget tidak dikenal menghasilkan error dengan `hint`, tanpa mengubah data.

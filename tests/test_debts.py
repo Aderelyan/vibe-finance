@@ -140,6 +140,61 @@ def test_no_cash(wallets):
     assert fin.ok("balance")["data"]["debt_total"] == 0
 
 
+def test_paid_for_records_debt_and_expense(wallets):
+    fin = wallets
+    fin.ok("budget", "alloc", "--item", "makan|100k")
+    unalloc, n = bud(fin, UNALLOC), fin.count_tx()
+    r = fin.ok("debt", "add", "--direction", "i_owe", "--person", "Budi", "--amount", "30k",
+               "--paid-for", "makan siang|makan")
+    d = r["data"]
+    assert d["expense_category"] == "makan" and d["expense_budget"] == "makan" and d["expense_id"]
+    assert "tidak berubah" in r["message"]
+    assert fin.count_tx() == n + 2
+    assert fin.balance("tunai") == 150_000  # saldo dompet tetap
+    assert bud(fin, UNALLOC) == unalloc + 30_000 and bud(fin, "makan") == 70_000
+    rep = fin.ok("report", "--period", "this-month", "--type", "expense")["data"]
+    assert rep["total"] == 30_000 and rep["by_category"][0]["category"] == "makan"
+    assert fin.ok("balance")["data"]["debt_total"] == 30_000
+    assert d["debt"]["note"] == "makan siang"
+
+    # dibayar nanti: uang keluar sekali saja
+    fin.ok("debt", "pay", "--person", "Budi", "--amount", "all")
+    assert fin.balance("tunai") == 120_000
+
+
+def test_paid_for_guess_category_and_undo(wallets):
+    fin = wallets
+    unalloc = bud(fin, UNALLOC)
+    r = fin.ok("debt", "add", "--direction", "i_owe", "--person", "Budi", "--amount", "12k",
+               "--paid-for", "kopi susu", "--account", "bri")
+    assert r["data"]["expense_category"] == "jajan" and "ditebak" in r["message"]
+    # kategori tanpa budget: pengeluaran memakai belum teralokasi, jadi belum teralokasi netto tetap
+    assert bud(fin, UNALLOC) == unalloc and fin.balance("bri") == 500_000
+    r = fin.ok("undo")
+    assert len(r["data"]["undone"]) == 2 and r["data"]["removed"][0]["id"] == 1
+    assert fin.ok("report", "--period", "this-month")["data"]["total"] == 0
+    assert fin.ok("balance")["data"]["debt_total"] == 0
+
+
+def test_paid_for_rejections(wallets):
+    fin = wallets
+    n = fin.count_tx()
+    fin.err("BAD_ARGS", "debt", "add", "--direction", "i_owe", "--person", "Budi", "--amount", "30k",
+            "--paid-for", "makan|makan", "--no-cash")
+    fin.err("BAD_ARGS", "debt", "add", "--direction", "owed_to_me", "--person", "Budi", "--amount", "30k",
+            "--paid-for", "makan|makan")
+    fin.err("BAD_ARGS", "debt", "add", "--direction", "i_owe", "--person", "Budi", "--amount", "30k",
+            "--paid-for", "|makan")
+    fin.err("BAD_ARGS", "debt", "add", "--direction", "i_owe", "--person", "Budi", "--amount", "30k",
+            "--paid-for", "a|b|c")
+    fin.err("UNKNOWN_CATEGORY", "debt", "add", "--direction", "i_owe", "--person", "Budi", "--amount", "30k",
+            "--paid-for", "makan|gaji")
+    fin.err("BAD_ARGS", "debt", "add", "--direction", "i_owe", "--person", "Budi", "--amount", "30k",
+            "--paid-for", "makan|makan", "--budget", "makan")
+    assert fin.count_tx() == n
+    assert fin.ok("debt", "list", "--status", "all", "--all")["data"]["count"] == 0
+
+
 def test_debts_not_in_reports(wallets):
     fin = wallets
     fin.ok("debt", "add", "--direction", "i_owe", "--person", "Budi", "--amount", "50k")

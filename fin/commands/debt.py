@@ -24,6 +24,9 @@ def register(sub):
     a.add_argument("--note")
     a.add_argument("--date", help="Tanggal pinjam: YYYY-MM-DD, today, atau yesterday.")
     a.add_argument("--no-cash", action="store_true", help="Tanpa aliran uang: dompet dan budget tidak berubah.")
+    a.add_argument("--paid-for", help="Khusus i_owe: orang itu membayari sesuatu untukmu, \"catatan|kategori\" "
+                                      "(kategori opsional). Hutang dan pengeluarannya dicatat sekaligus; "
+                                      "saldo dompet tidak berubah.")
     a.add_argument("--raw", help="Teks asli dari pengguna.")
     a.set_defaults(func=cmd_add)
 
@@ -95,12 +98,35 @@ def _person_total_text(conn, debt):
 
 # ---------- add ----------
 
+PAID_FOR_HINT = 'Format --paid-for "catatan|kategori" atau "catatan", contoh --paid-for "makan siang|makan".'
+
+
+def _parse_paid_for(conn, raw):
+    """(catatan, kategori pengeluaran, cara kategori ditentukan) dari --paid-for."""
+    parts = [p.strip() for p in raw.split("|")]
+    if len(parts) > 2 or not parts[0]:
+        raise FinError("BAD_ARGS", f"--paid-for '{raw}' tidak sesuai format.", hint=PAID_FOR_HINT)
+    if len(parts) == 2 and parts[1]:
+        return parts[0], resolve.category(conn, parts[1], "expense"), None
+    cat, keyword = resolve.guess_category(conn, parts[0], "expense")
+    return parts[0], cat, (f"ditebak dari kata '{keyword}'" if keyword else "tidak ada kata kunci yang cocok")
+
+
 def cmd_add(args, conn):
     person = resolve.clean_name(args.person, "nama orang")
     person = debts.known_person(conn, person) or person
     amount = parse_amount(args.amount)
     due = parse_day(args.due, "jatuh tempo").isoformat() if args.due else None
     money_out = args.direction == "owed_to_me"
+    paid_for = None
+    if args.paid_for is not None:
+        if args.no_cash:
+            raise FinError("BAD_ARGS", "--paid-for tidak bisa dipakai bersama --no-cash.",
+                           hint="--paid-for sudah mencatat hutang dan pengeluarannya sekaligus tanpa mengubah saldo.")
+        if money_out:
+            raise FinError("BAD_ARGS", "--paid-for hanya untuk --direction i_owe (orang lain membayari kamu).",
+                           hint="Untuk piutang tanpa uang keluar sekarang, pakai --no-cash.")
+        paid_for = _parse_paid_for(conn, args.paid_for)
     if args.no_cash:
         for opt, val in (("--account", args.account), ("--budget", args.budget), ("--date", args.date)):
             if val:
@@ -114,18 +140,28 @@ def cmd_add(args, conn):
         bud = _money_budget(conn, args.budget, money_out, "uang pinjaman yang kamu terima")
         ts = parse_date(args.date) if args.date else clock.now_ts()
 
-    tx_id = group = None
+    tx_id = group = expense_id = expense_budget = None
     with write(conn):
+        debt_note = args.note or (paid_for[0] if paid_for else None)
         debt_id = conn.execute("INSERT INTO debts(direction, person, principal, due_date, note, created_at) "
-                               "VALUES (?,?,?,?,?,?)", (args.direction, person, amount, due, args.note or None,
+                               "VALUES (?,?,?,?,?,?)", (args.direction, person, amount, due, debt_note,
                                                         clock.now_ts())).lastrowid
         if acc is not None:
             group = new_group(conn, "debt_add", restore=[["debts", debt_id, 1]])
-            note = f"pinjam dari {person}" if args.direction == "i_owe" else f"dipinjam {person}"
+            if paid_for:
+                note = f"{person} membayari {paid_for[0]}"
+            else:
+                note = f"pinjam dari {person}" if args.direction == "i_owe" else f"dipinjam {person}"
             if args.note:
                 note += f" ({args.note})"
             tx_id = insert_tx(conn, ts=ts, type=OPENING_TYPE[args.direction], amount=amount, account_id=acc["id"],
                               debt_id=debt_id, budget_id=bud["id"], note=note, raw_text=args.raw, group_id=group)
+            if paid_for:
+                # uang pinjaman langsung terpakai: saldo dompet tetap, budget kategorinya terpotong
+                expense_budget = budgets.for_expense(conn, paid_for[1]["id"])
+                expense_id = insert_tx(conn, ts=ts, type="expense", amount=amount, account_id=acc["id"],
+                                       category_id=paid_for[1]["id"], budget_id=expense_budget["id"],
+                                       note=f"{paid_for[0]} (dibayari {person})", raw_text=args.raw, group_id=group)
     debt = conn.execute("SELECT * FROM debts WHERE id = ?", (debt_id,)).fetchone()
 
     if args.direction == "i_owe":
@@ -136,6 +172,14 @@ def cmd_add(args, conn):
     msg += f", {due_txt}." if due_txt else "."
     if acc is None:
         msg += " Tanpa aliran uang: dompet dan budget tidak berubah."
+    elif paid_for:
+        cat = paid_for[1]["name"] + (f", {paid_for[2]}" if paid_for[2] else "")
+        msg += (f" {person} membayari {paid_for[0]}, dicatat sebagai pengeluaran {rupiah(amount)} "
+                f"(kategori {cat}). Saldo {acc['name']} tidak berubah; budget {UNALLOCATED} bertambah "
+                f"{rupiah(amount)} dari hutang, budget {expense_budget['name']} berkurang {rupiah(amount)}.")
+        if ts[:10] != clock.today().isoformat():
+            msg += f" Tanggal: {fmt_date(ts)}."
+        msg += " " + balance_sentence(conn, [acc["id"]]) + " " + budgets.sentence(conn, [bud["id"], expense_budget["id"]])
     else:
         acc_text = acc["name"] + (" (dompet default)" if used_default else "")
         msg += (f" Uangnya masuk ke {acc_text} dan ke budget {bud['name']}." if not money_out else
@@ -145,6 +189,9 @@ def cmd_add(args, conn):
         msg += " " + balance_sentence(conn, [acc["id"]]) + " " + budgets.sentence(conn, [bud["id"]])
     msg += " " + _person_total_text(conn, debt)
     return success(msg, {"debt": debts.info(conn, debt), "transaction_id": tx_id, "group_id": group,
+                         "expense_id": expense_id,
+                         "expense_category": paid_for[1]["name"] if paid_for else None,
+                         "expense_budget": expense_budget["name"] if expense_budget else None,
                          "account": acc["name"] if acc else None, "used_default_account": used_default,
                          "budget": bud["name"] if bud else None,
                          "balance_after": balance(conn, acc["id"]) if acc else None})

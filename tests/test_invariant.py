@@ -46,8 +46,11 @@ def random_command(rng, max_id):
         (1, ["category", "remove", cat, "--kind", "expense"]),
         (1, ["savings", "add", rng.choice(["tabungan", "laptop", "liburan"]), "--target", "1jt"]),
         (1, ["savings", "remove", rng.choice(["tabungan", "laptop", "liburan"])]),
-        (2, ["debt", "add", "--direction", rng.choice(["i_owe", "owed_to_me"]), "--person", person, "--amount", amt,
-             "--account", acc] + rng.choice([[], [], ["--budget", bud], ["--no-cash"]])),
+        (3, ["debt", "add", "--direction", "i_owe", "--person", person, "--amount", amt, "--account", acc]
+         + rng.choice([[], [], ["--no-cash"], ["--paid-for", f"ditraktir|{cat}"], ["--paid-for", "kopi"],
+                       ["--budget", bud]])),  # --budget di sini sengaja salah
+        (2, ["debt", "add", "--direction", "owed_to_me", "--person", person, "--amount", amt, "--account", acc]
+         + rng.choice([[], ["--budget", bud], ["--no-cash"], ["--paid-for", "x"]])),
         (3, ["debt", "pay", "--person", person, "--amount", rng.choice(AMOUNTS + ["all"]), "--account", acc]
          + rng.choice([[], [], ["--budget", bud], ["--direction", "i_owe"]])),
         (1, ["debt", "remove", "--person", person] + rng.choice([[], ["--write-off"]])),
@@ -67,11 +70,12 @@ def test_wallets_equal_budgets_after_random_commands(fin, seed):
     fin.ok("account", "add", "tunai", "--type", "cash", "--opening", "200k")
     fin.ok("account", "add", "bri", "--type", "bank", "--opening", "1jt")
     fin.ok("savings", "add", "tabungan")
-    ok_count = 0
+    ok_count, ok_by_command = 0, {}
     for step in range(300):
         cmd = random_command(rng, max_id=fin.max_tx_id())
         obj = fin(*cmd)  # memeriksa aturan utama dari tabel
         ok_count += obj["ok"]
+        ok_by_command[cmd[0]] = ok_by_command.get(cmd[0], 0) + obj["ok"]
         assert obj["ok"] or obj["error"]["code"] != "INTERNAL", (cmd, obj)
         if step % 25 == 0:
             data = fin.ok("balance")["data"] if fin.ok("account", "list")["data"]["accounts"] else None
@@ -82,7 +86,7 @@ def test_wallets_equal_budgets_after_random_commands(fin, seed):
     budgets = fin.ok("budget", "list")["data"]
     assert budgets["consistent"] is True
     check_debts_and_bills(fin)
-    assert fin.ok("debt", "list", "--status", "all", "--all")["data"]["count"] > 0
+    assert ok_by_command.get("debt", 0) >= 5 and ok_by_command.get("recurring", 0) >= 3, ok_by_command
 
 
 def check_debts_and_bills(fin):
