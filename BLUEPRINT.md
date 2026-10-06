@@ -51,7 +51,7 @@ Tulis prinsip ini juga ke `CLAUDE.md` di root project.
 
 - OS: Windows. Laptop dengan RAM terbatas, jadi program harus ringan dan cepat dijalankan.
 - Python 3.10 ke atas. Pakai pustaka standar (`sqlite3`, `argparse`, `json`, `datetime`, `shutil`). Dependensi luar hanya `openpyxl` (ekspor) dan `pytest` (tes).
-- Lokasi data: folder `data\` di dalam project. Bisa diganti lewat environment variable `FINANCE_HOME`.
+- Lokasi data: `<profil pengguna>\Documents\Manager\Finance\data` (profil = `%USERPROFILE%` di Windows, atau `~` di Linux/Mac), sama dengan `fin.sh`. Bisa diganti lewat environment variable `FINANCE_HOME`. Path yang memuat nama pengguna tidak ditulis di repo; selalu dihitung dari `USERPROFILE`/`HOME`.
 - Waktu: waktu lokal sistem (WIB), disimpan sebagai teks ISO `YYYY-MM-DD HH:MM:SS`.
 - Di awal `main()`, panggil `sys.stdout.reconfigure(encoding="utf-8")` agar output aman di terminal Windows.
 - Sediakan opsi global tersembunyi `--now "YYYY-MM-DD HH:MM:SS"` (atau env `FINANCE_NOW`) untuk memalsukan waktu sekarang. Ini dipakai tes dan demo.
@@ -78,7 +78,9 @@ vibe-finance\
   tests\
   tools\commands_doc.py # menjalankan contoh di COMMANDS.md dan mengisi outputnya
   docs\                 # dokumen perubahan (PERUBAHAN-xx.md)
-  data\                 # finance.db, backups\, exports\  (tidak masuk git)
+  fin.sh                # pembungkus bash (MSYS)
+  data\                 # lama, tidak dipakai lagi; tetap di .gitignore
+# folder data: <profil>\Documents\Manager\Finance\data\  (finance.db, backups\, exports\), di luar repo
   demo.py               # lihat bagian 9
   requirements.txt
   CLAUDE.md
@@ -309,7 +311,7 @@ Hapus kategori yang punya budget: budget itu ditutup dulu (sisa kembali ke `belu
 
 **Dompet default**: dompet pertama otomatis jadi default. Kalau dompet tidak diberikan, pakai dompet default, dan `message` menyebutkannya. Kalau belum ada dompet default, kembalikan error.
 
-**Backup otomatis**: pada operasi tulis pertama setiap hari, salin `finance.db` ke `data\backups\finance-YYYYMMDD.db`. Simpan 30 file terakhir.
+**Backup otomatis**: pada operasi tulis pertama setiap hari, salin `finance.db` ke `<folder data>\backups\finance-YYYYMMDD.db`. Simpan 30 file terakhir.
 
 ## 7. Spesifikasi CLI
 
@@ -364,7 +366,7 @@ Output selalu satu objek JSON di stdout, tidak ada teks lain:
 | `recurring pay <nama> [--amount] [--account] [--budget] [--date] [--month] [--raw]` | Catat pembayaran sebagai pengeluaran dan perbarui `last_paid_month`. |
 | `recurring set <nama> [--amount] [--day] [--category] [--account]` / `rename <nama> <baru>` / `remove <nama>` | Kelola tagihan rutin. |
 | `analyze --period ...` | Lihat bagian 8. |
-| `export --period ... [--out]` | Buat .xlsx di `data\exports`. Kembalikan path file di `data.path`. |
+| `export --period ... [--out]` | Buat .xlsx di `<folder data>\exports`. Kembalikan path file di `data.path`. |
 | `daily-check --when pagi\|malam` | Lihat bagian 8. |
 | `context` | Tanggal hari ini, dompet (nama, tipe, saldo, default), kategori, budget, tabungan, alias, kata kunci, hutang terbuka, tagihan rutin. Untuk pemanggil sebelum menyusun perintah. |
 | `batch --file <path.json> \| --stdin` | Daftar `{"cmd": ..., "args": {...}}` untuk `add`, `transfer`, `adjust`, `budget alloc`, `budget move`, `debt add`, `debt pay`, `recurring pay`. Setiap entri di-parse oleh parser CLI yang sama; semua dalam satu transaksi database dan satu `group_id` (satu `undo`). Format lengkap di `COMMANDS.md`. |
@@ -398,11 +400,11 @@ Detail perhitungan (`fin/analysis.py`):
 - `malam`: jika hari ini belum ada transaksi, pengingat singkat. Jika ada, total pengeluaran hari ini. Selalu `send: true`.
 - Jika tidak ada yang perlu disampaikan: `"data": {"send": false}`. Jika ada: `"send": true`.
 
-**`export`** (`openpyxl`, hanya dimuat saat ekspor): sheet Transaksi (periode itu), Ringkasan per kategori (periode itu), Saldo dompet (saat ini), Budget (saldo saat ini dan pengeluaran periode itu), Hutang piutang (yang tidak dihapus). Header tebal dan dibekukan, kolom nominal berformat angka, lebar kolom disesuaikan. Nama bawaan `data\exports\keuangan-<periode>-<YYYYMMDD-HHMMSS>.xlsx`; `--out` harus berakhiran `.xlsx`. File yang sedang dibuka Excel menghasilkan `BAD_ARGS` dengan hint.
+**`export`** (`openpyxl`, hanya dimuat saat ekspor): sheet Transaksi (periode itu), Ringkasan per kategori (periode itu), Saldo dompet (saat ini), Budget (saldo saat ini dan pengeluaran periode itu), Hutang piutang (yang tidak dihapus). Header tebal dan dibekukan, kolom nominal berformat angka, lebar kolom disesuaikan. Nama bawaan `<folder data>\exports\keuangan-<periode>-<YYYYMMDD-HHMMSS>.xlsx`; `--out` harus berakhiran `.xlsx`. File yang sedang dibuka Excel menghasilkan `BAD_ARGS` dengan hint.
 
 ## 9. Pengujian
 
-**`pytest`** dengan database sementara (`FINANCE_HOME` diarahkan ke folder tmp) dan waktu dipalsukan lewat `--now`. Setiap pemanggilan di tes memeriksa aturan utama (total dompet = total budget) langsung dari tabel. Minimal mencakup:
+**`pytest`** dengan database sementara (`FINANCE_HOME`, `USERPROFILE`, dan `HOME` diarahkan ke folder tmp untuk setiap tes, supaya data asli tidak pernah tersentuh) dan waktu dipalsukan lewat `--now`. Setiap pemanggilan di tes memeriksa aturan utama (total dompet = total budget) langsung dari tabel. Minimal mencakup:
 
 - `parse_amount`: semua format di bagian 6 dan input tidak sah.
 - Saldo benar setelah campuran income, expense, transfer dengan fee, adjustment, hutang.

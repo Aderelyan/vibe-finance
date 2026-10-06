@@ -22,7 +22,7 @@ def register(sub):
 
     p = sub.add_parser("export", help="Ekspor ke file Excel (.xlsx).")
     add_period_args(p)
-    p.add_argument("--out", help="Path file .xlsx (bawaan: data\\exports\\keuangan-<periode>-<waktu>.xlsx).")
+    p.add_argument("--out", help="Path file .xlsx (bawaan: <folder data>\\exports\\keuangan-<periode>-<waktu>.xlsx).")
     p.set_defaults(func=cmd_export)
 
 

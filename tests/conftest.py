@@ -82,6 +82,20 @@ class Fin:
             conn.close()
 
 
+@pytest.fixture(autouse=True)
+def _never_touch_real_data(tmp_path, monkeypatch):
+    """Pengaman: tanpa FINANCE_HOME, finance.py memakai folder data asli di profil pengguna.
+
+    Setiap tes mendapat FINANCE_HOME sementara, dan profil pengguna (USERPROFILE/HOME) juga diarahkan ke folder
+    sementara, supaya tes yang menghapus FINANCE_HOME pun tidak pernah menyentuh data asli.
+    """
+    profile = tmp_path / "_profil"
+    monkeypatch.setenv("FINANCE_HOME", str(tmp_path / "_data"))
+    monkeypatch.setenv("USERPROFILE", str(profile))
+    monkeypatch.setenv("HOME", str(profile))
+    monkeypatch.delenv("FINANCE_NOW", raising=False)
+
+
 @pytest.fixture
 def fin(tmp_path, monkeypatch):
     monkeypatch.setenv("FINANCE_HOME", str(tmp_path))

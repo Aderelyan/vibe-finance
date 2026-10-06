@@ -17,7 +17,9 @@ python -m venv .venv
 python finance.py init
 ```
 
-Data disimpan di folder `data\` (`finance.db`, `backups\`). Untuk memakai folder lain, set `FINANCE_HOME`.
+Data disimpan di `%USERPROFILE%\Documents\Manager\Finance\data` (`finance.db`, `backups\`, `exports\`); di
+Linux/Mac `~/Documents/Manager/Finance/data`. `finance.py` dan `fin.sh` memakai folder yang sama. Untuk memakai
+folder lain, set `FINANCE_HOME`.
 Backup otomatis dibuat pada operasi tulis pertama setiap hari, 30 file terakhir disimpan.
 
 ## Konsep: dompet dan budget (sistem amplop)
@@ -50,7 +52,7 @@ python demo.py
 
 Membuat database baru di folder sementara, menjalankan skenario Agustus-September 2026 (dua dompet, gaji, alokasi
 budget, tabungan, tagihan rutin, hutang, piutang, sekitar 45 transaksi), lalu mencetak saldo, laporan, budget,
-tabungan, hutang, tagihan, analisis, dan path file Excel hasil ekspor. Data aslimu di `data\` tidak disentuh.
+tabungan, hutang, tagihan, analisis, dan path file Excel hasil ekspor. Data aslimu di `Documents\Manager\Finance\data` tidak disentuh.
 
 ## Contoh pemakaian
 

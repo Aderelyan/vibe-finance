@@ -109,6 +109,20 @@ def test_finance_home_default_and_posix_form(tmp_path):
     assert Path(obj["data"]["path"]) == tmp_path / "posix" / "finance.db"
 
 
+def test_default_home_same_as_finance_py(tmp_path):
+    """Tanpa FINANCE_HOME, fin.sh dan finance.py langsung membuka database yang sama."""
+    profile = tmp_path / "profil"
+    code, via_sh = run("init", env_extra={"USERPROFILE": str(profile)})
+    env = {k: v for k, v in os.environ.items() if k != "FINANCE_HOME"}
+    env["USERPROFILE"] = str(profile)
+    proc = subprocess.run([sys.executable, str(ROOT / "finance.py"), "--now", DEFAULT_NOW, "init"],
+                          capture_output=True, env=env, cwd=str(tmp_path))
+    direct = json.loads(proc.stdout.decode("utf-8"))
+    assert Path(via_sh["data"]["path"]) == Path(direct["data"]["path"])
+    assert Path(direct["data"]["path"]) == profile / "Documents" / "Manager" / "Finance" / "data" / "finance.db"
+    assert direct["data"]["created"] is False  # database yang sudah dibuat lewat fin.sh
+
+
 def test_finance_home_msys_mount_path(tmp_path):
     """/tmp/... adalah mount MSYS, bukan C:/tmp. Data harus sampai di folder yang sama dengan yang dilihat bash."""
     name = f"fin-sh-test-{os.getpid()}-{tmp_path.name}"

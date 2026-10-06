@@ -9,7 +9,7 @@ Semua contoh di dokumen ini **dijalankan sungguhan** secara berurutan, pada data
 saling bersambung: saldo di satu contoh adalah akibat dari contoh-contoh sebelumnya.
 
 Di contoh output:
-- `<FINANCE_HOME>` adalah folder data (bawaan `data\` di dalam project).
+- `<FINANCE_HOME>` adalah folder data (bawaan `<profil pengguna>\Documents\Manager\Finance\data`).
 - `"<acak>"` adalah nilai acak (`group_id`), berbeda di setiap pemanggilan.
 - Daftar yang panjang dipotong menjadi 3 elemen pertama. Output asli berisi semuanya.
 
@@ -92,7 +92,7 @@ Lingkungan:
 
 | Nama | Arti |
 |---|---|
-| `FINANCE_HOME` | Folder data (`finance.db`, `backups\`, `exports\`). Bawaan: `data\` di dalam project. |
+| `FINANCE_HOME` | Folder data (`finance.db`, `backups\`, `exports\`). Bawaan: `%USERPROFILE%\Documents\Manager\Finance\data` di Windows, `~/Documents/Manager/Finance/data` di Linux/Mac. `finance.py` dan `fin.sh` memakai bawaan yang sama. |
 | `--now "YYYY-MM-DD HH:MM:SS"` | Opsi global tersembunyi, boleh di posisi mana pun: memalsukan waktu sekarang. Untuk tes dan demo. |
 | `FINANCE_NOW` | Sama dengan `--now`, lewat environment variable. |
 

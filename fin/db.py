@@ -280,9 +280,19 @@ class Connection(sqlite3.Connection):
     batch_group = None
 
 
+def default_home():
+    """<profil pengguna>/Documents/Manager/Finance/data. Profil = USERPROFILE (Windows), atau HOME.
+
+    Aturan yang sama dipakai fin.sh, jadi keduanya selalu membuka database yang sama.
+    """
+    profile = os.environ.get("USERPROFILE") or os.environ.get("HOME") or str(Path.home())
+    return Path(profile) / "Documents" / "Manager" / "Finance" / "data"
+
+
 def home():
+    """Folder data: FINANCE_HOME jika diisi, selain itu default_home()."""
     env = os.environ.get("FINANCE_HOME")
-    return Path(env) if env else Path(__file__).resolve().parent.parent / "data"
+    return Path(env) if env else default_home()
 
 
 def db_path():
@@ -350,7 +360,7 @@ def connect():
 
 
 def make_backup(conn, name=None):
-    """Salin database ke data/backups dan simpan BACKUP_KEEP file terakhir."""
+    """Salin database ke <folder data>/backups dan simpan BACKUP_KEEP file terakhir."""
     folder = backup_dir()
     folder.mkdir(parents=True, exist_ok=True)
     dest = folder / (name or f"finance-{clock.now().strftime('%Y%m%d')}.db")

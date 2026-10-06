@@ -19,6 +19,8 @@ riwayat perubahan spesifikasi ada di `docs\`.
 
 - `fin/cli.py`: parser (error argparse → JSON `BAD_ARGS`), opsi tersembunyi `--now`, penangkap `INTERNAL`.
 - `fin/db.py`: skema, migrasi via `meta.schema_version` (sekarang v3), `write(conn)` = satu transaksi DB + backup harian.
+  Folder data: `FINANCE_HOME`, atau `default_home()` = `<USERPROFILE atau HOME>/Documents/Manager/Finance/data`
+  (aturan yang sama dengan `fin.sh`; jangan tulis username di repo). Itu folder data ASLI pengguna.
 - `fin/parse.py`: `parse_amount`, `parse_date`, `parse_period`. Semua input nominal/tanggal/periode lewat sini.
 - `fin/resolve.py`: cari dompet/kategori dari nama atau alias; tebak kategori dari kata kunci.
 - `fin/ledger.py`: tulis transaksi, saldo dompet, `new_group()` (mencatat ke `op_groups` untuk urutan undo).
@@ -47,4 +49,7 @@ riwayat perubahan spesifikasi ada di `docs\`.
 - Validasi dulu, baru tulis di dalam `with write(conn):`. Error di dalam blok itu membatalkan semuanya.
 - Setiap pencatatan uang (transaksi atau pindahan budget) memakai `group_id` dari `new_group(conn, action, restore)` supaya bisa di-undo.
 - Tes: `.venv\Scripts\python -m pytest -q`. Tes memakai `FINANCE_HOME` sementara dan `--now`, dan setiap pemanggilan di tes memeriksa total dompet = total budget.
+  Fixture autouse `_never_touch_real_data` di `tests/conftest.py` mengarahkan `FINANCE_HOME`, `USERPROFILE`, dan
+  `HOME` ke folder sementara; jangan dihapus. Saat mencoba perintah manual, selalu set `FINANCE_HOME` ke folder
+  sementara supaya data asli tidak tersentuh.
 - Repo publik `origin` (github.com/Aderelyan/vibe-finance), branch `main`. Jangan commit database, backup, ekspor, `setup_awal.cmd`, atau data pribadi. Push setelah tahap selesai dan tes lolos; jangan force push.
