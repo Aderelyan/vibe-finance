@@ -41,7 +41,8 @@ Yang dilakukan `fin.sh`:
 - Mencari foldernya sendiri, jadi bisa dipanggil dari folder mana pun lewat path apa pun. Folder kerja pemanggil
   tidak diubah, jadi path relatif (`batch --file x.json`, `export --out x.xlsx`) tetap relatif ke folder pemanggil.
 - Jika `FINANCE_HOME` belum diisi, memakai `<profil pengguna Windows>/Documents/Manager/Finance/data`
-  (dari `USERPROFILE`). Jika sudah diisi, tidak ditimpa; bentuk MSYS seperti `/c/data` diubah menjadi `C:/data`.
+  (dari `USERPROFILE`). Jika sudah diisi, tidak ditimpa; path MSYS diubah ke bentuk Windows yang sama
+  (`/c/data` → `C:/data`, `/tmp/x` → folder Windows yang dipakai MSYS untuk `/tmp`).
 - Mengisi `PYTHONIOENCODING=utf-8` dan `PYTHONUTF8=1`.
 - Menjalankan `.venv/Scripts/python.exe finance.py "$@"`: semua argumen diteruskan apa adanya, termasuk spasi, `|`,
   `--actual=-5k`, dan teks yang diawali `/` (konversi path otomatis MSYS dimatikan). Stdin tetap tersambung

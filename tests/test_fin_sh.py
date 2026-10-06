@@ -109,6 +109,19 @@ def test_finance_home_default_and_posix_form(tmp_path):
     assert Path(obj["data"]["path"]) == tmp_path / "posix" / "finance.db"
 
 
+def test_finance_home_msys_mount_path(tmp_path):
+    """/tmp/... adalah mount MSYS, bukan C:/tmp. Data harus sampai di folder yang sama dengan yang dilihat bash."""
+    name = f"fin-sh-test-{os.getpid()}-{tmp_path.name}"
+    real = subprocess.run([BASH, "-c", "cd /tmp && pwd -W"], capture_output=True).stdout.decode().strip()
+    assert real
+    target = Path(real) / name / "data"
+    try:
+        code, obj = run("init", env_extra={"FINANCE_HOME": f"/tmp/{name}/data"})
+        assert code == 0 and Path(obj["data"]["path"]) == target / "finance.db" and (target / "finance.db").exists()
+    finally:
+        shutil.rmtree(Path(real) / name, ignore_errors=True)
+
+
 def test_missing_venv_gives_json(tmp_path):
     copy = tmp_path / "tanpa venv"
     copy.mkdir()

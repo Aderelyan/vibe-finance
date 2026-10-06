@@ -9,11 +9,24 @@
 # - Argumen diteruskan apa adanya (konversi path otomatis MSYS dimatikan), stdin tetap tersambung,
 #   exit code diteruskan. Stdout hanya berisi output finance.py (satu objek JSON).
 
-# Path Windows ke bentuk yang dimengerti Python Windows: /c/x -> C:/x, backslash -> slash.
+# Path ke bentuk yang dimengerti Python Windows (C:/x). Backslash -> slash; /c/x -> C:/x; path MSYS lain
+# (/tmp/x, /home/x) lewat cygpath, atau jika tidak ada lewat `pwd -W` dari folder induk terdekat yang sudah ada.
 to_windows_path() {
-    local p="${1//\\//}"
+    local p="${1//\\//}" head tail="" win
     if [[ $p =~ ^/([a-zA-Z])(/.*)?$ ]]; then
         p="${BASH_REMATCH[1]^^}:${BASH_REMATCH[2]:-/}"
+    elif [[ $p == /* ]]; then
+        if command -v cygpath >/dev/null 2>&1; then
+            p="$(cygpath -m -- "$p")"
+        else
+            head="${p%/}"
+            while [[ -n $head && ! -d $head ]]; do
+                tail="/${head##*/}$tail"
+                head="${head%/*}"
+            done
+            win="$(CDPATH='' cd -- "${head:-/}" >/dev/null 2>&1 && pwd -W 2>/dev/null)"
+            [[ -n $win ]] && p="${win%/}$tail"
+        fi
     fi
     printf '%s' "$p"
 }
