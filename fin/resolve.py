@@ -54,8 +54,9 @@ def account(conn, name, include_archived=False):
     if row is None:
         raise FinError("UNKNOWN_ACCOUNT", f"Dompet '{name}' tidak ada.", hint=_account_hint(conn))
     if row["archived"] and not include_archived:
-        raise FinError("UNKNOWN_ACCOUNT", f"Dompet '{row['name']}' sudah diarsipkan.",
-                       hint=f"Aktifkan lagi dengan: account unarchive {row['name']}. {_account_hint(conn)}")
+        raise FinError("UNKNOWN_ACCOUNT", f"Dompet '{row['name']}' sudah dihapus.",
+                       hint=f"Untuk memakainya lagi: account add {row['name']} --type {row['type']}. "
+                            f"{_account_hint(conn)}")
     return row
 
 
@@ -115,8 +116,8 @@ def category(conn, name, kind=None, include_archived=False):
                        hint="Tambahkan --kind expense atau --kind income.")
     row = rows[0]
     if row["archived"] and not include_archived:
-        raise FinError("UNKNOWN_CATEGORY", f"Kategori '{row['name']}' sudah diarsipkan.",
-                       hint=f"Aktifkan lagi dengan: category unarchive \"{row['name']}\" --kind {row['kind']}. "
+        raise FinError("UNKNOWN_CATEGORY", f"Kategori '{row['name']}' sudah dihapus.",
+                       hint=f"Untuk memakainya lagi: category add \"{row['name']}\" --kind {row['kind']}. "
                             + _category_hint(conn, kind))
     return row
 

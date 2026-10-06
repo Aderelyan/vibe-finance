@@ -59,14 +59,15 @@ def test_unknown_account_does_not_change_data(wallets):
     fin = wallets
     before = fin.count_tx()
     e = fin.err("UNKNOWN_ACCOUNT", "add", "--type", "expense", "--account", "bca", "--item", "x|1k")
-    assert e["error"]["hint"] == "Pilihan: tunai, bri, gopay, tabungan"
+    assert e["error"]["hint"] == "Pilihan: tunai, bri, gopay"
     fin.err("UNKNOWN_ACCOUNT", "transfer", "--from", "bca", "--to", "tunai", "--amount", "1k")
     fin.err("UNKNOWN_ACCOUNT", "adjust", "--account", "bca", "--actual", "1k")
     assert fin.count_tx() == before
 
 
 def test_no_default_account(fin):
-    fin.ok("account", "add", "tabungan", "--type", "savings")
+    fin.ok("account", "add", "tunai", "--type", "cash")
+    fin.ok("account", "remove", "tunai")  # dompet terakhir boleh dihapus walau default
     e = fin.err("NO_DEFAULT_ACCOUNT", "add", "--type", "expense", "--item", "x|1k")
     assert "set-default" in e["error"]["hint"]
 
@@ -78,23 +79,22 @@ def test_transfer_fee_and_mixed_balance(wallets):
     r = fin.ok("transfer", "--from", "bri", "--to", "tunai", "--amount", "200k", "--fee", "2.5k")
     assert r["data"]["kind"] == "cash_withdrawal"
     assert "Tarik tunai" in r["message"] and "Rp2.500" in r["message"]
-    r = fin.ok("transfer", "--from", "bri", "--to", "tabungan", "--amount", "100k")
-    assert r["data"]["kind"] == "saving" and "Menabung" in r["message"]
+    fin.ok("budget", "alloc", "--item", "tabungan|100k")
     fin.ok("transfer", "--from", "gopay", "--to", "tunai", "--amount", "20k")
     fin.err("BAD_ARGS", "transfer", "--from", "bri", "--to", "BRI", "--amount", "1k")
     fin.err("BAD_AMOUNT", "transfer", "--from", "bri", "--to", "tunai", "--amount", "0")
     r = fin.ok("adjust", "--account", "gopay", "--actual", "25k")
     assert r["data"]["difference"] == -5_000
 
-    assert fin.balance("bri") == 500_000 + 600_000 - 200_000 - 2_500 - 100_000
+    assert fin.balance("bri") == 500_000 + 600_000 - 200_000 - 2_500
     assert fin.balance("tunai") == 150_000 - 15_000 + 200_000 + 20_000
     assert fin.balance("gopay") == 25_000
-    assert fin.balance("tabungan") == 100_000
     total = fin.ok("balance")["data"]
-    assert total["spending_total"] == 797_500 + 355_000 + 25_000
+    assert total["total_dompet"] == 897_500 + 355_000 + 25_000
+    assert total["total_budget"] == total["total_dompet"] and total["consistent"] is True
     assert total["savings_total"] == 100_000
-    assert total["total"] == total["spending_total"] + 100_000
-    assert total["net_worth"] == total["total"]
+    assert total["non_savings_total"] == total["total_dompet"] - 100_000
+    assert total["net_worth"] == total["total_dompet"]
 
     # transfer, adjustment, dan saldo awal tidak masuk laporan
     rep = fin.ok("report", "--period", "this-month", "--type", "all")["data"]
@@ -131,8 +131,8 @@ def test_edit_changes_balance(wallets):
     t = fin.ok("transfer", "--from", "bri", "--to", "tunai", "--amount", "50k")["data"]["transfer_id"]
     fin.err("BAD_ARGS", "edit", t, "--category", "makan")
     fin.err("BAD_ARGS", "edit", t, "--to", "bri")
-    fin.ok("edit", t, "--to", "tabungan", "--amount", "60k")
-    assert fin.balance("tunai") == 150_000 and fin.balance("tabungan") == 60_000
+    fin.ok("edit", t, "--to", "gopay", "--amount", "60k")
+    assert fin.balance("tunai") == 150_000 and fin.balance("gopay") == 98_000
     assert fin.balance("bri") == 440_000
 
 

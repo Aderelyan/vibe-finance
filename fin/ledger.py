@@ -1,4 +1,5 @@
 """Menulis transaksi dan menghitung saldo. Saldo tidak pernah disimpan."""
+import json
 import uuid
 
 from . import clock
@@ -8,32 +9,44 @@ TYPE_LABEL = {
     "income": "pemasukan", "expense": "pengeluaran", "transfer": "transfer",
     "adjustment": "penyesuaian", "debt_in": "hutang/piutang masuk", "debt_out": "hutang/piutang keluar",
 }
-ACCOUNT_TYPE_LABEL = {"cash": "tunai", "bank": "bank", "ewallet": "e-wallet", "savings": "tabungan"}
-SPENDING_TYPES = ("cash", "bank", "ewallet")
+ACCOUNT_TYPE_LABEL = {"cash": "tunai", "bank": "bank", "ewallet": "e-wallet"}
 
-TX_SELECT = ("SELECT t.*, a.name AS account, b.name AS to_account, c.name AS category "
+TX_SELECT = ("SELECT t.*, a.name AS account, b.name AS to_account, c.name AS category, bu.name AS budget "
              "FROM transactions t JOIN accounts a ON a.id = t.account_id "
              "LEFT JOIN accounts b ON b.id = t.to_account_id "
-             "LEFT JOIN categories c ON c.id = t.category_id")
+             "LEFT JOIN categories c ON c.id = t.category_id "
+             "LEFT JOIN budgets bu ON bu.id = t.budget_id")
 
 
-def new_group():
-    return uuid.uuid4().hex[:12]
+def new_group(conn, action, restore=None):
+    """Satu pemanggilan perintah = satu group. Urutan op_groups.id dipakai undo.
+
+    restore: [[tabel, id], ...] yang diaktifkan lagi (archived = 0) jika group ini di-undo.
+    """
+    group_id = uuid.uuid4().hex[:12]
+    conn.execute("INSERT INTO op_groups(group_id, action, restore, created_at) VALUES (?,?,?,?)",
+                 (group_id, action, json.dumps(restore) if restore else None, clock.now_ts()))
+    return group_id
 
 
-def insert_tx(conn, *, ts, type, amount, account_id, group_id, to_account_id=None, category_id=None,
-              debt_id=None, note=None, raw_text=None):
+def insert_tx(conn, *, ts, type, amount, account_id, group_id, budget_id=None, to_account_id=None,
+              category_id=None, debt_id=None, note=None, raw_text=None):
     if not isinstance(amount, int) or isinstance(amount, bool):
         raise TypeError("amount harus integer")
     if type == "adjustment":
         assert amount != 0
     else:
         assert amount > 0
+    # aturan utama total dompet = total budget: semua selain transfer wajib punya budget
+    if type == "transfer":
+        assert budget_id is None, "transfer tidak boleh punya budget"
+    else:
+        assert budget_id is not None, f"transaksi {type} wajib punya budget"
     cur = conn.execute(
-        "INSERT INTO transactions(ts, type, amount, account_id, to_account_id, category_id, debt_id, "
-        "note, raw_text, group_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        (ts, type, amount, account_id, to_account_id, category_id, debt_id, note or None, raw_text or None,
-         group_id, clock.now_ts()))
+        "INSERT INTO transactions(ts, type, amount, account_id, to_account_id, category_id, debt_id, budget_id, "
+        "note, raw_text, group_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (ts, type, amount, account_id, to_account_id, category_id, debt_id, budget_id, note or None,
+         raw_text or None, group_id, clock.now_ts()))
     return cur.lastrowid
 
 
@@ -82,7 +95,7 @@ def get_tx(conn, tx_id, include_deleted=False):
 
 
 def tx_dict(row):
-    return {k: row[k] for k in ("id", "ts", "type", "amount", "account", "to_account", "category",
+    return {k: row[k] for k in ("id", "ts", "type", "amount", "account", "to_account", "category", "budget",
                                 "debt_id", "note", "raw_text", "group_id", "deleted_at")}
 
 
@@ -97,6 +110,8 @@ def tx_line(row):
     desc = row["note"] or "(tanpa catatan)"
     if row["category"]:
         desc += f" [{row['category']}]"
+    if row["budget"] and row["type"] == "expense" and row["budget"] != row["category"]:
+        desc += f" (budget {row['budget']})"
     line = f"#{row['id']} {fmt_ts(row['ts'])} · {TYPE_LABEL[row['type']]} {amount} · {desc} · {where}"
     if row["deleted_at"]:
         line += " (dihapus)"

@@ -1,7 +1,9 @@
 """add / transfer / adjust / edit / delete / undo"""
-from .. import clock, debts, resolve
-from ..db import write
-from ..ledger import (balance, balance_sentence, get_tx, insert_tx, new_group, tx_dict, tx_line, TX_SELECT)
+import json
+
+from .. import budgets, clock, debts, resolve
+from ..db import UNALLOCATED, write
+from ..ledger import (TX_SELECT, balance, balance_sentence, get_tx, insert_tx, new_group, tx_dict, tx_line)
 from ..output import FinError, fmt_date, fmt_ts, rupiah, signed_rupiah, success
 from ..parse import parse_amount, parse_date
 
@@ -13,11 +15,12 @@ def register(sub):
     p.add_argument("--type", required=True, choices=["income", "expense"])
     p.add_argument("--item", action="append", required=True, help="catatan|jumlah|kategori (kategori opsional)")
     p.add_argument("--account", help="Dompet (bawaan: dompet default).")
+    p.add_argument("--budget", help="Khusus pengeluaran: ambil dari budget ini, bukan budget kategorinya.")
     p.add_argument("--date", help="YYYY-MM-DD, today, atau yesterday.")
     p.add_argument("--raw", help="Teks asli dari pengguna.")
     p.set_defaults(func=cmd_add)
 
-    p = sub.add_parser("transfer", help="Pindah uang antar dompet (termasuk menabung dan tarik tunai).")
+    p = sub.add_parser("transfer", help="Pindah uang antar dompet (termasuk tarik tunai). Budget tidak berubah.")
     p.add_argument("--from", dest="from_account", required=True)
     p.add_argument("--to", dest="to_account", required=True)
     p.add_argument("--amount", required=True)
@@ -29,7 +32,7 @@ def register(sub):
 
     p = sub.add_parser("adjust", help="Samakan saldo dompet dengan kenyataan.")
     p.add_argument("--account", required=True)
-    p.add_argument("--actual", required=True, help="Saldo sebenarnya sekarang.")
+    p.add_argument("--actual", required=True, help="Saldo sebenarnya sekarang (boleh 0).")
     p.add_argument("--note")
     p.set_defaults(func=cmd_adjust)
 
@@ -37,6 +40,7 @@ def register(sub):
     p.add_argument("id", type=int)
     p.add_argument("--amount")
     p.add_argument("--category")
+    p.add_argument("--budget", help="Khusus pengeluaran: pindahkan ke budget ini.")
     p.add_argument("--account")
     p.add_argument("--to", dest="to_account", help="Dompet tujuan (khusus transfer).")
     p.add_argument("--note")
@@ -47,7 +51,7 @@ def register(sub):
     p.add_argument("id", type=int)
     p.set_defaults(func=cmd_delete)
 
-    p = sub.add_parser("undo", help="Batalkan pencatatan terakhir.")
+    p = sub.add_parser("undo", help="Batalkan pencatatan terakhir (transaksi atau alokasi budget).")
     p.set_defaults(func=cmd_undo)
 
 
@@ -100,16 +104,25 @@ def _category_text(item):
 
 def cmd_add(args, conn):
     kind = args.type
+    if args.budget and kind != "expense":
+        raise FinError("BAD_ARGS", "--budget hanya untuk pengeluaran.",
+                       hint=f"Pemasukan selalu masuk ke {UNALLOCATED}; bagi lewat budget alloc.")
     acc, used_default = resolve.account_or_default(conn, args.account)
     ts = _ts_or_now(args.date)
     items = [_parse_item(conn, raw, kind, i, len(args.item)) for i, raw in enumerate(args.item, 1)]
+    forced = budgets.find(conn, args.budget) if args.budget else None
 
-    group = new_group()
     with write(conn):
+        group = new_group(conn, "add")
         for item in items:
+            if kind == "income":
+                bud = budgets.unallocated(conn)
+            else:
+                bud = forced or budgets.for_expense(conn, item["category"]["id"])
+            item["budget"] = bud
             item["id"] = insert_tx(conn, ts=ts, type=kind, amount=item["amount"], account_id=acc["id"],
-                                   category_id=item["category"]["id"], note=item["note"], raw_text=args.raw,
-                                   group_id=group)
+                                   category_id=item["category"]["id"], budget_id=bud["id"], note=item["note"],
+                                   raw_text=args.raw, group_id=group)
 
     word = "pengeluaran" if kind == "expense" else "pemasukan"
     prep = "dari" if kind == "expense" else "ke"
@@ -123,13 +136,18 @@ def cmd_add(args, conn):
         details = "; ".join(f"{i['note'] or '(tanpa catatan)'} {rupiah(i['amount'])} [{_category_text(i)}]"
                             for i in items)
         msg = f"Tercatat {len(items)} {word} ({rupiah(total)}) {prep} {acc_text}: {details}."
+    if forced:
+        msg += f" Diambil dari budget {forced['name']}."
     msg += _date_note(ts) + " " + balance_sentence(conn, [acc["id"]])
+    msg += " " + budgets.sentence(conn, [i["budget"]["id"] for i in items])
 
+    bals = budgets.balances(conn)
     return success(msg, {
         "group_id": group, "type": kind, "account": acc["name"], "used_default_account": used_default,
         "ts": ts, "total": total, "balance_after": balance(conn, acc["id"]),
         "items": [{"id": i["id"], "note": i["note"], "amount": i["amount"], "category": i["category"]["name"],
-                   "category_source": i["how"]} for i in items],
+                   "category_source": i["how"], "budget": i["budget"]["name"],
+                   "budget_balance": bals[i["budget"]["id"]]} for i in items],
     })
 
 
@@ -146,21 +164,19 @@ def cmd_transfer(args, conn):
     fee_cat = resolve.category_by_name(conn, "biaya admin", "expense") if fee else None
     ts = _ts_or_now(args.date)
 
-    group = new_group()
+    fee_id = fee_budget = None
     with write(conn):
+        group = new_group(conn, "transfer")
         tx_id = insert_tx(conn, ts=ts, type="transfer", amount=amount, account_id=src["id"],
                           to_account_id=dst["id"], note=args.note, raw_text=args.raw, group_id=group)
-        fee_id = None
         if fee:
+            fee_budget = budgets.for_expense(conn, fee_cat["id"])
             fee_id = insert_tx(conn, ts=ts, type="expense", amount=fee, account_id=src["id"],
-                               category_id=fee_cat["id"], note=f"biaya admin transfer {src['name']} ke {dst['name']}",
+                               category_id=fee_cat["id"], budget_id=fee_budget["id"],
+                               note=f"biaya admin transfer {src['name']} ke {dst['name']}",
                                raw_text=args.raw, group_id=group)
 
-    if dst["type"] == "savings" and src["type"] != "savings":
-        kind, verb = "saving", f"Menabung {rupiah(amount)} dari {src['name']} ke {dst['name']}."
-    elif src["type"] == "savings" and dst["type"] != "savings":
-        kind, verb = "withdraw_savings", f"Mengambil tabungan {rupiah(amount)} dari {src['name']} ke {dst['name']}."
-    elif src["type"] == "bank" and dst["type"] == "cash":
+    if src["type"] == "bank" and dst["type"] == "cash":
         kind, verb = "cash_withdrawal", f"Tarik tunai {rupiah(amount)} dari {src['name']} ke {dst['name']}."
     else:
         kind, verb = "transfer", f"Transfer {rupiah(amount)} dari {src['name']} ke {dst['name']}."
@@ -168,6 +184,8 @@ def cmd_transfer(args, conn):
     if fee:
         msg += f" Biaya admin {rupiah(fee)} dicatat sebagai pengeluaran dari {src['name']}."
     msg += _date_note(ts) + " " + balance_sentence(conn, [src["id"], dst["id"]])
+    if fee:
+        msg += " " + budgets.sentence(conn, [fee_budget["id"]])
     return success(msg, {
         "group_id": group, "kind": kind, "transfer_id": tx_id, "fee_id": fee_id, "amount": amount, "fee": fee,
         "from": src["name"], "to": dst["name"], "ts": ts,
@@ -185,16 +203,20 @@ def cmd_adjust(args, conn):
     if diff == 0:
         return success(f"Saldo {acc['name']} sudah {rupiah(actual)}, tidak ada perubahan.",
                        {"account": acc["name"], "before": current, "after": actual, "difference": 0, "id": None})
-    group = new_group()
+    unalloc = budgets.unallocated(conn)
     with write(conn):
+        group = new_group(conn, "adjust")
         tx_id = insert_tx(conn, ts=clock.now_ts(), type="adjustment", amount=diff, account_id=acc["id"],
-                          note=args.note or "penyesuaian saldo", group_id=group)
+                          budget_id=unalloc["id"], note=args.note or "penyesuaian saldo", group_id=group)
     msg = (f"Saldo {acc['name']} disesuaikan dari {rupiah(current)} menjadi {rupiah(actual)} "
-           f"(selisih {signed_rupiah(diff)}). Selisih ini tidak dihitung sebagai pemasukan atau pengeluaran.")
+           f"(selisih {signed_rupiah(diff)}). Selisih ini {'masuk ke' if diff > 0 else 'keluar dari'} "
+           f"budget {UNALLOCATED} dan tidak dihitung sebagai pemasukan atau pengeluaran. "
+           + budgets.sentence(conn, [unalloc["id"]]))
     if actual < 0:
         msg += f" Peringatan: saldo {acc['name']} minus."
     return success(msg, {"account": acc["name"], "before": current, "after": actual, "difference": diff,
-                         "id": tx_id, "group_id": group})
+                         "id": tx_id, "group_id": group,
+                         "unallocated_balance": budgets.balances(conn)[unalloc["id"]]})
 
 
 # ---------- edit ----------
@@ -211,6 +233,10 @@ def cmd_edit(args, conn):
     row = get_tx(conn, args.id)
     if row is None:
         raise _not_found(args.id, conn)
+    if not any(v is not None for v in (args.amount, args.category, args.budget, args.account, args.to_account,
+                                       args.note, args.date)):
+        raise FinError("BAD_ARGS", "Tidak ada yang diubah.",
+                       hint="Isi minimal satu: --amount, --category, --budget, --account, --to, --note, --date.")
     t = row["type"]
     updates, changes = {}, []
 
@@ -222,6 +248,7 @@ def cmd_edit(args, conn):
         if amount != row["amount"]:
             updates["amount"] = amount
             changes.append(("jumlah", rupiah(row["amount"]), rupiah(amount)))
+    new_budget = None
     if args.category is not None:
         if t not in ("income", "expense"):
             raise FinError("BAD_ARGS", f"Transaksi #{row['id']} bertipe {t} tidak punya kategori.")
@@ -229,6 +256,15 @@ def cmd_edit(args, conn):
         if cat["id"] != row["category_id"]:
             updates["category_id"] = cat["id"]
             changes.append(("kategori", row["category"], cat["name"]))
+            if t == "expense":
+                new_budget = budgets.for_expense(conn, cat["id"])
+    if args.budget is not None:
+        if t != "expense":
+            raise FinError("BAD_ARGS", "--budget hanya untuk pengeluaran.")
+        new_budget = budgets.find(conn, args.budget)
+    if new_budget is not None and new_budget["id"] != row["budget_id"]:
+        updates["budget_id"] = new_budget["id"]
+        changes.append(("budget", row["budget"], new_budget["name"]))
     new_from, new_to = row["account_id"], row["to_account_id"]
     if args.account is not None:
         acc = resolve.account(conn, args.account)
@@ -255,10 +291,6 @@ def cmd_edit(args, conn):
             updates["ts"] = ts
             changes.append(("waktu", fmt_ts(row["ts"]), fmt_ts(ts)))
 
-    if not any(v is not None for v in (args.amount, args.category, args.account, args.to_account,
-                                       args.note, args.date)):
-        raise FinError("BAD_ARGS", "Tidak ada yang diubah.",
-                       hint="Isi minimal satu: --amount, --category, --account, --to, --note, --date.")
     if not updates:
         return success(f"Transaksi #{row['id']} tidak berubah karena nilainya sama.",
                        {"id": row["id"], "before": tx_dict(row), "after": tx_dict(row), "changes": []})
@@ -274,6 +306,8 @@ def cmd_edit(args, conn):
         affected += [row["to_account_id"], after["to_account_id"]]
     msg = (f"Transaksi #{row['id']} diubah: " + "; ".join(f"{k} {a} → {b}" for k, a, b in changes) + ". "
            + balance_sentence(conn, affected))
+    if row["budget_id"]:
+        msg += " " + budgets.sentence(conn, [row["budget_id"], after["budget_id"]])
     return success(msg, {"id": row["id"], "before": tx_dict(row), "after": tx_dict(after),
                          "changes": [{"field": k, "before": a, "after": b} for k, a, b in changes]})
 
@@ -289,21 +323,25 @@ def _accounts_of(rows):
     return ids
 
 
-def _soft_delete(conn, rows):
+def _soft_delete(conn, rows, moves=()):
     now = clock.now_ts()
-    with write(conn):
-        for r in rows:
-            conn.execute("UPDATE transactions SET deleted_at = ? WHERE id = ?", (now, r["id"]))
-        for debt_id in {r["debt_id"] for r in rows if r["debt_id"]}:
-            debts.recompute_status(conn, debt_id)
+    for r in rows:
+        conn.execute("UPDATE transactions SET deleted_at = ? WHERE id = ?", (now, r["id"]))
+    for m in moves:
+        conn.execute("UPDATE budget_moves SET deleted_at = ? WHERE id = ?", (now, m["id"]))
+    for debt_id in {r["debt_id"] for r in rows if r["debt_id"]}:
+        debts.recompute_status(conn, debt_id)
 
 
 def cmd_delete(args, conn):
     row = get_tx(conn, args.id)
     if row is None:
         raise _not_found(args.id, conn)
-    _soft_delete(conn, [row])
+    with write(conn):
+        _soft_delete(conn, [row])
     msg = f"Transaksi dihapus: {tx_line(row)}. " + balance_sentence(conn, _accounts_of([row]))
+    if row["budget_id"]:
+        msg += " " + budgets.sentence(conn, [row["budget_id"]])
     siblings = conn.execute(TX_SELECT + " WHERE t.group_id = ? AND t.deleted_at IS NULL ORDER BY t.id",
                             (row["group_id"],)).fetchall()
     if siblings:
@@ -313,19 +351,60 @@ def cmd_delete(args, conn):
                          "remaining_in_group": [s["id"] for s in siblings]})
 
 
+MOVE_SELECT = ("SELECT m.*, f.name AS from_budget, t.name AS to_budget FROM budget_moves m "
+               "JOIN budgets f ON f.id = m.from_budget_id JOIN budgets t ON t.id = m.to_budget_id")
+
+
+def move_line(m):
+    line = f"pindah budget {rupiah(m['amount'])} {m['from_budget']} → {m['to_budget']}"
+    if m["note"]:
+        line += f" ({m['note']})"
+    return line
+
+
 def cmd_undo(args, conn):
-    last = conn.execute("SELECT group_id FROM transactions WHERE deleted_at IS NULL "
-                        "ORDER BY id DESC LIMIT 1").fetchone()
-    if last is None:
-        raise FinError("NOTHING_TO_UNDO", "Tidak ada transaksi yang bisa dibatalkan.")
+    group = conn.execute(
+        "SELECT * FROM op_groups g WHERE g.undoable = 1 AND ("
+        " EXISTS (SELECT 1 FROM transactions t WHERE t.group_id = g.group_id AND t.deleted_at IS NULL) OR"
+        " EXISTS (SELECT 1 FROM budget_moves m WHERE m.group_id = g.group_id AND m.deleted_at IS NULL))"
+        " ORDER BY g.id DESC LIMIT 1").fetchone()
+    if group is None:
+        raise FinError("NOTHING_TO_UNDO", "Tidak ada transaksi atau alokasi budget yang bisa dibatalkan.")
+    gid = group["group_id"]
     rows = conn.execute(TX_SELECT + " WHERE t.group_id = ? AND t.deleted_at IS NULL ORDER BY t.id",
-                        (last["group_id"],)).fetchall()
-    _soft_delete(conn, rows)
-    if len(rows) == 1:
-        msg = f"Dibatalkan: {tx_line(rows[0])}."
+                        (gid,)).fetchall()
+    moves = conn.execute(MOVE_SELECT + " WHERE m.group_id = ? AND m.deleted_at IS NULL ORDER BY m.id",
+                         (gid,)).fetchall()
+    restore = json.loads(group["restore"]) if group["restore"] else []
+    restored = []
+    with write(conn):
+        _soft_delete(conn, rows, moves)
+        for table, ref_id in restore:
+            assert table in ("accounts", "budgets", "categories")
+            conn.execute(f"UPDATE {table} SET archived = 0 WHERE id = ?", (ref_id,))
+            name = conn.execute(f"SELECT name FROM {table} WHERE id = ?", (ref_id,)).fetchone()["name"]
+            restored.append({"table": table, "id": ref_id, "name": name})
+            if table == "accounts" and not conn.execute(
+                    "SELECT 1 FROM accounts WHERE is_default = 1 AND archived = 0").fetchone():
+                conn.execute("UPDATE accounts SET is_default = 1 WHERE id = ?", (ref_id,))
+
+    lines = [tx_line(r) for r in rows] + [move_line(m) for m in moves]
+    if len(lines) == 1:
+        msg = f"Dibatalkan: {lines[0]}."
     else:
-        msg = f"Dibatalkan {len(rows)} transaksi dari pencatatan terakhir:\n" + \
-              "\n".join(f"- {tx_line(r)}" for r in rows) + "\n"
-    msg = msg.rstrip("\n") + " " + balance_sentence(conn, _accounts_of(rows))
-    return success(msg, {"group_id": last["group_id"], "undone": [r["id"] for r in rows],
+        msg = f"Dibatalkan {len(lines)} catatan dari pencatatan terakhir:\n" + "\n".join(f"- {x}" for x in lines) + "\n"
+    if restored:
+        label = {"accounts": "dompet", "budgets": "budget", "categories": "kategori"}
+        msg = msg.rstrip("\n") + " Diaktifkan kembali: " + \
+            ", ".join(f"{label[r['table']]} {r['name']}" for r in restored) + "."
+    tail = []
+    if rows:
+        tail.append(balance_sentence(conn, _accounts_of(rows)))
+    bud_ids = [r["budget_id"] for r in rows if r["budget_id"]]
+    bud_ids += [x for m in moves for x in (m["from_budget_id"], m["to_budget_id"])]
+    if bud_ids:
+        tail.append(budgets.sentence(conn, bud_ids))
+    msg = msg.rstrip("\n") + " " + " ".join(tail)
+    return success(msg, {"group_id": gid, "action": group["action"], "undone": [r["id"] for r in rows],
+                         "undone_moves": [m["id"] for m in moves], "restored": restored,
                          "transactions": [tx_dict(r) for r in rows]})

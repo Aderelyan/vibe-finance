@@ -128,7 +128,103 @@ def _migrate_v1(conn):
             conn.execute("INSERT INTO aliases(kind, alias, target_id) VALUES ('keyword', ?, ?)", (w, cat_id))
 
 
-MIGRATIONS = {1: _migrate_v1}
+UNALLOCATED = "belum teralokasi"
+
+SCHEMA_V2 = """
+DROP TABLE budgets;
+
+CREATE TABLE budgets (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  kind TEXT NOT NULL CHECK (kind IN ('unallocated','category','savings')),
+  category_id INTEGER UNIQUE REFERENCES categories(id),
+  target_amount INTEGER,
+  target_date TEXT,
+  archived INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE budget_moves (
+  id INTEGER PRIMARY KEY,
+  ts TEXT NOT NULL,
+  from_budget_id INTEGER NOT NULL REFERENCES budgets(id),
+  to_budget_id INTEGER NOT NULL REFERENCES budgets(id),
+  amount INTEGER NOT NULL CHECK (amount > 0),
+  note TEXT,
+  group_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  deleted_at TEXT
+);
+CREATE INDEX idx_moves_ts ON budget_moves(ts);
+
+CREATE TABLE op_groups (
+  id INTEGER PRIMARY KEY,
+  group_id TEXT NOT NULL UNIQUE,
+  action TEXT NOT NULL,
+  restore TEXT,
+  undoable INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+
+ALTER TABLE transactions ADD COLUMN budget_id INTEGER REFERENCES budgets(id);
+
+CREATE TABLE accounts_v2 (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  type TEXT NOT NULL CHECK (type IN ('cash','bank','ewallet')),
+  is_default INTEGER NOT NULL DEFAULT 0,
+  archived INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+"""
+
+
+def _migrate_v2(conn):
+    """Budget amplop: tabel budgets baru, budget_moves, op_groups, transactions.budget_id.
+    Dompet bertipe savings menjadi bank, dan saldonya dialokasikan ke tabungan bernama sama."""
+    now = clock.now_ts()
+    savings = conn.execute("SELECT * FROM accounts WHERE type = 'savings' ORDER BY id").fetchall()
+    for stmt in SCHEMA_V2.split(";"):
+        if stmt.strip():
+            conn.execute(stmt)
+    conn.execute("INSERT INTO accounts_v2(id, name, type, is_default, archived, created_at) "
+                 "SELECT id, name, CASE type WHEN 'savings' THEN 'bank' ELSE type END, is_default, archived, "
+                 "created_at FROM accounts")
+    conn.execute("DROP TABLE accounts")
+    conn.execute("ALTER TABLE accounts_v2 RENAME TO accounts")
+
+    unalloc = conn.execute("INSERT INTO budgets(name, kind, created_at) VALUES (?, 'unallocated', ?)",
+                           (UNALLOCATED, now)).lastrowid
+    conn.execute("UPDATE transactions SET budget_id = ? WHERE type != 'transfer'", (unalloc,))
+    conn.execute("INSERT INTO op_groups(group_id, action, created_at) "
+                 "SELECT group_id, 'legacy', MIN(created_at) FROM transactions GROUP BY group_id ORDER BY MIN(id)")
+
+    for acc in savings:
+        name = acc["name"]
+        if conn.execute("SELECT 1 FROM budgets WHERE name = ?", (name,)).fetchone():
+            name = f"{name} (tabungan)"
+        bud = conn.execute("INSERT INTO budgets(name, kind, target_amount, target_date, archived, created_at) "
+                           "VALUES (?, 'savings', ?, ?, ?, ?)",
+                           (name, acc["target_amount"], acc["target_date"], acc["archived"], now)).lastrowid
+        bal = conn.execute(
+            "SELECT COALESCE(SUM(CASE WHEN account_id = :a AND type IN ('income','debt_in','adjustment') THEN amount "
+            "WHEN account_id = :a THEN -amount WHEN to_account_id = :a THEN amount ELSE 0 END), 0) "
+            "FROM transactions WHERE deleted_at IS NULL AND (account_id = :a OR to_account_id = :a)",
+            {"a": acc["id"]}).fetchone()[0]
+        if bal:
+            group = f"migrasi-v2-{acc['id']}"
+            conn.execute("INSERT INTO op_groups(group_id, action, undoable, created_at) "
+                         "VALUES (?, 'migration', 0, ?)", (group, now))
+            src, dst = (unalloc, bud) if bal > 0 else (bud, unalloc)
+            conn.execute("INSERT INTO budget_moves(ts, from_budget_id, to_budget_id, amount, note, group_id, "
+                         "created_at) VALUES (?,?,?,?,?,?,?)",
+                         (now, src, dst, abs(bal), f"migrasi dompet tabungan {acc['name']}", group, now))
+    if not conn.execute("SELECT 1 FROM accounts WHERE is_default = 1 AND archived = 0").fetchone():
+        conn.execute("UPDATE accounts SET is_default = 1 WHERE id = "
+                     "(SELECT MIN(id) FROM accounts WHERE archived = 0)")
+
+
+MIGRATIONS = {1: _migrate_v1, 2: _migrate_v2}
 SCHEMA_VERSION = max(MIGRATIONS)
 
 
@@ -169,11 +265,21 @@ def schema_version(conn):
 
 def migrate(conn):
     version = schema_version(conn)
-    for v in sorted(MIGRATIONS):
-        if v > version:
+    pending = [v for v in sorted(MIGRATIONS) if v > version]
+    if not pending:
+        return
+    if version >= 1:
+        make_backup(conn, name=f"finance-{clock.now().strftime('%Y%m%d')}-pre-v{pending[-1]}.db")
+    # tabel dibangun ulang saat migrasi, jadi foreign key dimatikan lalu diperiksa manual
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        for v in pending:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 MIGRATIONS[v](conn)
+                broken = conn.execute("PRAGMA foreign_key_check").fetchall()
+                if broken:
+                    raise RuntimeError(f"Migrasi v{v} merusak foreign key: {[tuple(r) for r in broken[:5]]}")
                 set_meta(conn, "schema_version", v)
                 conn.execute("COMMIT")
             except BaseException:
@@ -181,6 +287,8 @@ def migrate(conn):
                 raise
             if v == 1:
                 conn.created = True
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 def connect():

@@ -25,7 +25,30 @@ class Fin:
         code, obj = execute(["--now", now or self.now, *[str(a) for a in args]])
         json.dumps(obj)  # harus bisa diserialisasi
         assert (code == 0) == obj["ok"], obj
+        self.check_invariant()
         return obj
+
+    def totals(self):
+        """(total dompet, total budget) dihitung langsung dari tabel, terpisah dari kode aplikasi."""
+        import sqlite3
+        conn = sqlite3.connect(self.home / "finance.db")
+        try:
+            sign = "CASE WHEN type IN ('income','debt_in','adjustment') THEN amount ELSE -amount END"
+            wallets = conn.execute(f"SELECT COALESCE(SUM({sign}), 0) FROM transactions "
+                                   "WHERE deleted_at IS NULL AND type != 'transfer'").fetchone()[0]
+            budget_tx = conn.execute(f"SELECT COALESCE(SUM({sign}), 0) FROM transactions "
+                                     "WHERE deleted_at IS NULL AND budget_id IS NOT NULL").fetchone()[0]
+            missing = conn.execute("SELECT COUNT(*) FROM transactions WHERE (type = 'transfer') = "
+                                   "(budget_id IS NOT NULL)").fetchone()[0]
+            assert missing == 0, "budget_id harus terisi untuk semua transaksi selain transfer"
+            return wallets, budget_tx  # pindahan budget selalu berjumlah nol
+        finally:
+            conn.close()
+
+    def check_invariant(self):
+        if (self.home / "finance.db").exists():
+            wallets, budgets = self.totals()
+            assert wallets == budgets, f"total dompet {wallets} != total budget {budgets}"
 
     def ok(self, *args, now=None):
         obj = self(*args, now=now)
@@ -41,6 +64,14 @@ class Fin:
 
     def balance(self, account):
         return self.ok("balance", "--account", account)["data"]["balance"]
+
+    def max_tx_id(self):
+        import sqlite3
+        conn = sqlite3.connect(self.home / "finance.db")
+        try:
+            return conn.execute("SELECT COALESCE(MAX(id), 0) FROM transactions").fetchone()[0]
+        finally:
+            conn.close()
 
     def count_tx(self):
         import sqlite3
@@ -61,12 +92,20 @@ def fin(tmp_path, monkeypatch):
 
 
 @pytest.fixture
+def fin_home(tmp_path, monkeypatch):
+    """Folder data kosong tanpa init, untuk menyiapkan database sendiri (mis. tes migrasi)."""
+    monkeypatch.setenv("FINANCE_HOME", str(tmp_path))
+    monkeypatch.delenv("FINANCE_NOW", raising=False)
+    return tmp_path, Fin(tmp_path)
+
+
+@pytest.fixture
 def wallets(fin):
-    """tunai 150k (default), bri 500k, gopay 50k, tabungan 0."""
+    """Dompet tunai 150k (default), bri 500k, gopay 50k, dan tabungan (budget) bernama 'tabungan'."""
     fin.ok("account", "add", "tunai", "--type", "cash", "--opening", "150k", "--default")
     fin.ok("account", "add", "bri", "--type", "bank", "--opening", "500k")
     fin.ok("account", "add", "gopay", "--type", "ewallet", "--opening", "50k")
-    fin.ok("account", "add", "tabungan", "--type", "savings", "--target", "2jt")
+    fin.ok("savings", "add", "tabungan", "--target", "2jt")
     return fin
 
 

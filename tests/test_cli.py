@@ -35,35 +35,51 @@ def test_utf8_output(tmp_path):
     assert "☕" in obj["message"]
 
 
-def test_required_scenarios_stage1(tmp_path):
-    """Skenario wajib (bagian 9) yang sudah tersedia di tahap 1."""
+def test_required_scenarios(tmp_path):
+    """Skenario wajib (BLUEPRINT bagian 9 dan PERUBAHAN-01 bagian F) yang sudah tersedia."""
     run = lambda *a: run_subprocess(tmp_path, *a)  # noqa: E731
+    bud = lambda name: next(b["balance"] for b in run("budget", "list")["data"]["budgets"]  # noqa: E731
+                            if b["name"] == name)
     assert run("init")["ok"]
     assert run("account", "add", "tunai", "--type", "cash", "--opening", "150k", "--default")["ok"]
     assert run("account", "add", "bri", "--type", "bank", "--opening", "500k")["ok"]
-    assert run("account", "add", "tabungan", "--type", "savings")["ok"]
+    assert run("savings", "add", "tabungan", "--target", "2jt")["ok"]
 
     r = run("add", "--type", "expense", "--item", "ayam goreng|15k|makan")
     assert r["data"]["total"] == 15_000
+    before = bud("belum teralokasi")
     r = run("add", "--type", "income", "--item", "gajian|600k|gaji")
     assert r["data"]["balance_after"] == 135_000 + 600_000
+    assert bud("belum teralokasi") == before + 600_000
+    r = run("budget", "alloc", "--item", "makan|300k", "--item", "transport|100k")
+    assert r["data"]["total"] == 400_000
+    r = run("budget", "alloc", "--item", "tabungan|100k")
+    assert bud("tabungan") == 100_000
     r = run("add", "--type", "expense", "--item", "jajan|10k|jajan", "--item", "es teh|3k|jajan")
     assert r["data"]["total"] == 13_000 and len(r["data"]["items"]) == 2
     r = run("add", "--type", "expense", "--item", "jajan, parkir, makan|50k|makan")
-    assert r["data"]["total"] == 50_000
+    assert r["data"]["items"][0]["budget_balance"] == 250_000
+    r = run("budget", "move", "--from", "makan", "--to", "jajan", "--amount", "50k")
+    assert r["data"]["to_balance"] == 50_000
+    assert run("budget", "list")["data"]["consistent"] is True
+    assert run("savings", "list")["data"]["total"] == 100_000
     assert run("balance", "--account", "bri")["data"]["balance"] == 500_000
-    r = run("transfer", "--from", "bri", "--to", "tabungan", "--amount", "100k")
-    assert r["data"]["balance_to"] == 100_000
     r = run("transfer", "--from", "bri", "--to", "tunai", "--amount", "200k", "--fee", "2.5k")
-    assert r["data"]["balance_from"] == 197_500
+    assert r["data"]["balance_from"] == 297_500
     r = run("adjust", "--account", "bri", "--actual", "450k")
-    assert r["data"]["difference"] == 252_500
-    tunai = 150_000 - 15_000 + 600_000 - 13_000 - 50_000 + 200_000
+    assert r["data"]["difference"] == 152_500
+    assert run("account", "add", "gopay", "--type", "ewallet", "--opening", "50k")["ok"]
+    r = run("account", "remove", "gopay", "--move-to", "bri")
+    assert r["data"]["moved_to"] == "bri" and run("balance", "--account", "bri")["data"]["balance"] == 500_000
+    r = run("adjust", "--account", "tunai", "--actual", "0")
+    assert run("balance", "--account", "tunai")["data"]["balance"] == 0
+    assert run("category", "add", "kucing", "--kind", "expense")["ok"]
+    assert run("category", "remove", "hiburan", "--kind", "expense")["ok"]
     total = run("balance")["data"]
-    assert total["total"] == tunai + 450_000 + 100_000
+    assert total["total_dompet"] == 500_000 and total["consistent"] is True
     rep = run("report", "--period", "this-month", "--type", "expense")["data"]
     assert rep["total"] == 15_000 + 13_000 + 50_000 + 2_500
     assert run("report", "--period", "2026-08", "--type", "expense")["data"]["total"] == 0
     assert run("report", "--period", "last:3", "--type", "expense")["data"]["period"]["start"] == "2026-08-01"
     r = run("undo")
-    assert r["data"]["undone"] and run("balance", "--account", "bri")["data"]["balance"] == 197_500
+    assert r["data"]["undone"] and run("balance", "--account", "tunai")["data"]["balance"] > 0

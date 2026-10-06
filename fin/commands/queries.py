@@ -1,8 +1,9 @@
 """balance / report / list"""
-from .. import debts, resolve
-from ..ledger import ACCOUNT_TYPE_LABEL, SPENDING_TYPES, TX_SELECT, balances, tx_dict, tx_line
+from .. import budgets, debts, resolve
+from ..ledger import ACCOUNT_TYPE_LABEL, TX_SELECT, balances, tx_dict, tx_line
 from ..output import FinError, fmt_pct, rupiah, success
 from ..report import summarize
+from .budget import overview_message
 from .common import add_period_args, period_from_args
 
 TX_TYPES = ["income", "expense", "transfer", "adjustment", "debt_in", "debt_out"]
@@ -10,7 +11,7 @@ KIND_WORD = {"expense": "Pengeluaran", "income": "Pemasukan"}
 
 
 def register(sub):
-    p = sub.add_parser("balance", help="Saldo satu dompet, atau semua beserta total.")
+    p = sub.add_parser("balance", help="Saldo satu dompet, atau semua dompet dan budget beserta total.")
     p.add_argument("--account")
     p.set_defaults(func=cmd_balance)
 
@@ -48,27 +49,30 @@ def cmd_balance(args, conn):
             if not r["archived"] or bals[r["id"]] != 0]
     if not rows:
         raise FinError("UNKNOWN_ACCOUNT", "Belum ada dompet.",
-                       hint="Buat dulu, contoh: account add tunai --type cash --opening 100k --default")
-    spending = sum(bals[r["id"]] for r in rows if r["type"] in SPENDING_TYPES)
-    savings = sum(bals[r["id"]] for r in rows if r["type"] == "savings")
-    total = spending + savings
+                       hint="Buat dulu, contoh: account add tunai --type cash --opening 100k")
+    total_dompet = sum(bals.values())
+    ov = budgets.overview(conn)
     owe, owed = debts.totals(conn)
-    net_worth = total + owed - owe
+    net_worth = total_dompet + owed - owe
 
-    lines = ["Saldo per dompet:"]
+    lines = ["Per dompet (uangnya di mana):"]
     for r in rows:
         lines.append(f"- {r['name']} ({ACCOUNT_TYPE_LABEL[r['type']]}): {rupiah(bals[r['id']])}"
-                     + (" [minus]" if bals[r["id"]] < 0 else ""))
-    lines += [f"Uang pakai: {rupiah(spending)}", f"Tabungan: {rupiah(savings)}", f"Total: {rupiah(total)}"]
+                     + (" [dihapus]" if r["archived"] else "") + (" [minus]" if bals[r["id"]] < 0 else ""))
+    lines.append(f"Total dompet: {rupiah(total_dompet)}")
+    lines.append("")
+    lines.append("Per budget (uangnya untuk apa):")
+    lines += overview_message(conn, ov, total_dompet)
     if owe or owed:
-        lines += [f"Hutang saya: {rupiah(owe)} | Piutang: {rupiah(owed)}", f"Kekayaan bersih: {rupiah(net_worth)}"]
+        lines += ["", f"Hutang saya: {rupiah(owe)} | Piutang: {rupiah(owed)}",
+                  f"Kekayaan bersih: {rupiah(net_worth)}"]
     negatives = [r["name"] for r in rows if bals[r["id"]] < 0]
     if negatives:
-        lines.append(f"Peringatan: saldo {', '.join(negatives)} minus.")
+        lines.append(f"Peringatan: saldo dompet {', '.join(negatives)} minus.")
     return success("\n".join(lines), {
         "accounts": [{"name": r["name"], "type": r["type"], "balance": bals[r["id"]],
-                      "is_default": bool(r["is_default"])} for r in rows],
-        "spending_total": spending, "savings_total": savings, "total": total,
+                      "is_default": bool(r["is_default"]), "archived": bool(r["archived"])} for r in rows],
+        "total_dompet": total_dompet, **ov, "consistent": total_dompet == ov["total_budget"],
         "debt_total": owe, "receivable_total": owed, "net_worth": net_worth,
     })
 

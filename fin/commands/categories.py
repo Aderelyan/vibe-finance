@@ -1,7 +1,8 @@
 """category add / list / archive / unarchive, dan alias add / list / remove"""
-from .. import resolve
-from ..db import write
-from ..output import FinError, success
+from .. import budgets, resolve
+from ..db import UNALLOCATED, write
+from ..ledger import new_group
+from ..output import FinError, rupiah, success
 from ..resolve import KIND_LABEL
 
 KINDS = ["expense", "income"]
@@ -22,12 +23,16 @@ def register(sub):
     a.add_argument("--all", action="store_true", help="Sertakan kategori yang diarsipkan.")
     a.set_defaults(func=cmd_category_list)
 
-    for action, func, text in (("archive", cmd_category_archive, "Arsipkan kategori."),
-                               ("unarchive", cmd_category_unarchive, "Aktifkan lagi kategori.")):
-        a = s.add_parser(action, help=text)
-        a.add_argument("name")
-        a.add_argument("--kind", choices=KINDS, help="Wajib jika nama ada di pemasukan dan pengeluaran.")
-        a.set_defaults(func=func)
+    a = s.add_parser("rename", help="Ganti nama kategori.")
+    a.add_argument("name")
+    a.add_argument("new_name")
+    a.add_argument("--kind", choices=KINDS, help="Wajib jika nama ada di pemasukan dan pengeluaran.")
+    a.set_defaults(func=cmd_category_rename)
+
+    a = s.add_parser("remove", help="Hapus kategori (budgetnya ikut ditutup).")
+    a.add_argument("name")
+    a.add_argument("--kind", choices=KINDS, help="Wajib jika nama ada di pemasukan dan pengeluaran.")
+    a.set_defaults(func=cmd_category_remove)
 
     p = sub.add_parser("alias", help="Kelola alias dompet/kategori dan kata kunci tebak kategori.")
     s = p.add_subparsers(dest="action", required=True, metavar="<aksi>")
@@ -51,23 +56,47 @@ def register(sub):
 
 # ---------- category ----------
 
-def cmd_category_add(args, conn):
-    name = resolve.clean_name(args.name, "nama kategori")
+def _ensure_name_free(conn, name, kind, except_id=None):
     key = resolve.norm(name)
-    for row in conn.execute("SELECT * FROM categories WHERE kind = ?", (args.kind,)):
-        if resolve.norm(row["name"]) == key:
-            hint = (f"Kategori itu diarsipkan; aktifkan dengan: category unarchive \"{row['name']}\" --kind {args.kind}"
-                    if row["archived"] else None)
-            raise FinError("BAD_ARGS", f"Kategori {KIND_LABEL[args.kind]} '{row['name']}' sudah ada.", hint=hint)
-    for row in conn.execute("SELECT al.alias, c.name FROM aliases al JOIN categories c ON c.id = al.target_id "
-                            "WHERE al.kind = 'category' AND c.kind = ?", (args.kind,)):
-        if resolve.norm(row["alias"]) == key:
+    if key == resolve.norm(UNALLOCATED):
+        raise FinError("SYSTEM_PROTECTED", f"Nama '{UNALLOCATED}' dipakai sistem.")
+    for row in conn.execute("SELECT * FROM categories WHERE kind = ?", (kind,)):
+        if row["id"] != except_id and resolve.norm(row["name"]) == key:
+            raise FinError("BAD_ARGS", f"Kategori {KIND_LABEL[kind]} '{row['name']}' sudah ada.")
+    for row in conn.execute("SELECT al.alias, c.name, c.id FROM aliases al JOIN categories c ON c.id = al.target_id "
+                            "WHERE al.kind = 'category' AND c.kind = ?", (kind,)):
+        if row["id"] != except_id and resolve.norm(row["alias"]) == key:
             raise FinError("BAD_ARGS", f"'{name}' sudah dipakai sebagai alias kategori {row['name']}.",
                            hint=f"Hapus dulu aliasnya: alias remove --kind category --alias \"{row['alias']}\"")
+    if kind == "expense":
+        clash = budgets.name_taken(conn, name)
+        if clash and not (clash["kind"] == "category" and clash["category_id"] == except_id):
+            raise FinError("BAD_ARGS", f"Nama '{name}' sudah dipakai budget {budgets.KIND_LABEL[clash['kind']]}.",
+                           hint="Kategori pengeluaran dan tabungan tidak boleh bernama sama. Pakai nama lain.")
+
+
+def _protect(cat, action):
+    if (cat["name"].lower(), cat["kind"]) in SYSTEM_CATEGORIES:
+        raise FinError("SYSTEM_PROTECTED", f"Kategori '{cat['name']}' dipakai sistem dan tidak bisa {action}.")
+
+
+def cmd_category_add(args, conn):
+    name = resolve.clean_name(args.name, "nama kategori")
+    archived = [r for r in conn.execute("SELECT * FROM categories WHERE kind = ? AND archived = 1", (args.kind,))
+                if resolve.norm(r["name"]) == resolve.norm(name)]
+    if archived:
+        cat = archived[0]
+        with write(conn):
+            conn.execute("UPDATE categories SET archived = 0 WHERE id = ?", (cat["id"],))
+        return success(f"Kategori {KIND_LABEL[args.kind]} '{cat['name']}' diaktifkan kembali.",
+                       {"id": cat["id"], "name": cat["name"], "kind": args.kind, "reactivated": True})
+    _ensure_name_free(conn, name, args.kind)
     with write(conn):
         cat_id = conn.execute("INSERT INTO categories(name, kind) VALUES (?, ?)", (name, args.kind)).lastrowid
-    return success(f"Kategori {KIND_LABEL[args.kind]} '{name}' ditambahkan.",
-                   {"id": cat_id, "name": name, "kind": args.kind})
+    msg = f"Kategori {KIND_LABEL[args.kind]} '{name}' ditambahkan."
+    if args.kind == "expense":
+        msg += f" Belum punya budget; pengeluarannya memakai {UNALLOCATED} sampai diberi alokasi."
+    return success(msg, {"id": cat_id, "name": name, "kind": args.kind, "reactivated": False})
 
 
 def cmd_category_list(args, conn):
@@ -80,30 +109,60 @@ def cmd_category_list(args, conn):
         for r in rows:
             keywords = [k["alias"] for k in conn.execute(
                 "SELECT alias FROM aliases WHERE kind = 'keyword' AND target_id = ? ORDER BY alias", (r["id"],))]
+            bud = budgets.for_category(conn, r["id"]) if kind == "expense" else None
             data.append({"id": r["id"], "name": r["name"], "kind": kind, "archived": bool(r["archived"]),
-                         "keywords": keywords})
-            names.append(r["name"] + (" [arsip]" if r["archived"] else ""))
+                         "has_budget": bud is not None, "keywords": keywords})
+            names.append(r["name"] + (" [dihapus]" if r["archived"] else ""))
         lines.append(f"Kategori {KIND_LABEL[kind]}: {', '.join(names) or '-'}.")
     return success("\n".join(lines), {"categories": data})
 
 
-def _set_category_archived(args, conn, archived):
-    cat = resolve.category(conn, args.name, args.kind, include_archived=True)
-    if archived and (cat["name"].lower(), cat["kind"]) in SYSTEM_CATEGORIES:
-        raise FinError("BAD_ARGS", f"Kategori '{cat['name']}' dipakai sistem dan tidak bisa diarsipkan.")
+def cmd_category_rename(args, conn):
+    cat = resolve.category(conn, args.name, args.kind)
+    _protect(cat, "diganti nama")
+    new = resolve.clean_name(args.new_name, "nama kategori")
+    _ensure_name_free(conn, new, cat["kind"], except_id=cat["id"])
     with write(conn):
-        conn.execute("UPDATE categories SET archived = ? WHERE id = ?", (int(archived), cat["id"]))
-    state = "diarsipkan" if archived else "aktif lagi"
-    return success(f"Kategori {KIND_LABEL[cat['kind']]} '{cat['name']}' {state}.",
-                   {"id": cat["id"], "name": cat["name"], "kind": cat["kind"], "archived": archived})
+        conn.execute("UPDATE categories SET name = ? WHERE id = ?", (new, cat["id"]))
+        conn.execute("UPDATE budgets SET name = ? WHERE kind = 'category' AND category_id = ?", (new, cat["id"]))
+    return success(f"Kategori {KIND_LABEL[cat['kind']]} '{cat['name']}' diganti nama menjadi '{new}'.",
+                   {"id": cat["id"], "old_name": cat["name"], "name": new, "kind": cat["kind"]})
 
 
-def cmd_category_archive(args, conn):
-    return _set_category_archived(args, conn, True)
-
-
-def cmd_category_unarchive(args, conn):
-    return _set_category_archived(args, conn, False)
+def cmd_category_remove(args, conn):
+    cat = resolve.category(conn, args.name, args.kind)
+    _protect(cat, "dihapus")
+    bud = conn.execute("SELECT * FROM budgets WHERE kind = 'category' AND category_id = ?", (cat["id"],)).fetchone()
+    swept = 0
+    with write(conn):
+        if bud is not None:
+            swept = budgets.balances(conn)[bud["id"]]
+            if swept:
+                restore = [["categories", cat["id"]]] + ([["budgets", bud["id"]]] if not bud["archived"] else [])
+                group = new_group(conn, "category_remove", restore=restore)
+                budgets.sweep_to_unallocated(conn, bud, group, f"hapus kategori {cat['name']}")
+            conn.execute("UPDATE budgets SET archived = 1 WHERE id = ?", (bud["id"],))
+        used = bud is not None or conn.execute(
+            "SELECT 1 FROM transactions WHERE category_id = ? UNION ALL "
+            "SELECT 1 FROM recurring WHERE category_id = ? LIMIT 1", (cat["id"], cat["id"])).fetchone()
+        if used:
+            mode = "archived"
+            conn.execute("UPDATE categories SET archived = 1 WHERE id = ?", (cat["id"],))
+        else:
+            mode = "deleted"
+            conn.execute("DELETE FROM aliases WHERE kind IN ('category','keyword') AND target_id = ?", (cat["id"],))
+            conn.execute("DELETE FROM categories WHERE id = ?", (cat["id"],))
+    label = f"Kategori {KIND_LABEL[cat['kind']]} '{cat['name']}'"
+    if mode == "deleted":
+        msg = f"{label} dihapus permanen karena belum pernah dipakai."
+    else:
+        msg = f"{label} dihapus. Riwayat transaksinya tetap disimpan (diarsipkan)."
+    if bud is not None and not bud["archived"]:
+        msg += f" Budget {cat['name']} ditutup"
+        msg += f", sisa {rupiah(swept)} dikembalikan ke {UNALLOCATED}." if swept else "."
+        msg += " " + budgets.sentence(conn, [budgets.unallocated(conn)["id"]])
+    return success(msg, {"id": cat["id"], "name": cat["name"], "kind": cat["kind"], "mode": mode,
+                         "budget_closed": bud is not None and not bud["archived"], "returned_to_unallocated": swept})
 
 
 # ---------- alias ----------

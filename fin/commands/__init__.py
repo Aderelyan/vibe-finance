@@ -1,7 +1,7 @@
 """Setiap modul punya register(sub) yang menambahkan subparser beserta handler-nya."""
-from . import accounts, categories, queries, setup, transactions
+from . import accounts, budget, categories, queries, savings, setup, transactions
 
-MODULES = [setup, accounts, categories, transactions, queries]
+MODULES = [setup, accounts, categories, transactions, queries, budget, savings]
 
 
 def register_all(sub):
