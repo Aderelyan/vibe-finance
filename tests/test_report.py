@@ -6,7 +6,7 @@ def _seed(fin):
     fin.ok("add", "--type", "expense", "--item", "nasi|30k|makan", now="2026-08-01 00:00:00")
     fin.ok("add", "--type", "expense", "--item", "bensin|10k|transport", now="2026-08-31 23:59:59")
     fin.ok("add", "--type", "income", "--account", "bri", "--item", "gajian|600k|gaji", now="2026-08-25 09:00:00")
-    fin.ok("budget", "alloc", "--item", "tabungan|100k", now="2026-08-26 09:00:00")
+    fin.ok("savings", "deposit", "--from", "bri", "--to", "tabungan", "--amount", "100k", now="2026-08-26 09:00:00")
     fin.ok("transfer", "--from", "bri", "--to", "tunai", "--amount", "50k", "--fee", "2.5k",
            now="2026-09-01 00:00:00")
     fin.ok("add", "--type", "expense", "--item", "kopi|15k|jajan", "--item", "nasi|25k|makan",

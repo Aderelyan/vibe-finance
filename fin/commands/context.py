@@ -16,7 +16,10 @@ def cmd_context(args, conn):
     today = clock.today()
     bals = balances(conn)
     accounts = [{"name": r["name"], "type": r["type"], "balance": bals[r["id"]], "is_default": bool(r["is_default"])}
-                for r in conn.execute("SELECT * FROM accounts WHERE archived = 0 ORDER BY id")]
+                for r in conn.execute("SELECT * FROM accounts WHERE archived = 0 AND type != 'savings' ORDER BY id")]
+    savings = [{"name": r["name"], "balance": bals[r["id"]], "target_amount": r["target_amount"],
+                "target_date": r["target_date"], "loans_outstanding": debts.savings_loans_total(conn, r["id"])}
+               for r in conn.execute("SELECT * FROM accounts WHERE archived = 0 AND type = 'savings' ORDER BY id")]
     categories = {kind: [r["name"] for r in conn.execute(
         "SELECT name FROM categories WHERE kind = ? AND archived = 0 ORDER BY id", (kind,))]
         for kind in ("expense", "income")}
@@ -25,8 +28,6 @@ def cmd_context(args, conn):
                         "WHEN 'category' THEN 1 ELSE 2 END, id").fetchall()
     budget_items = [{"name": r["name"], "kind": r["kind"], "balance": bud_bals[r["id"]]}
                     for r in rows if r["kind"] != "savings"]
-    savings = [{"name": r["name"], "balance": bud_bals[r["id"]], "target_amount": r["target_amount"],
-                "target_date": r["target_date"]} for r in rows if r["kind"] == "savings"]
     aliases, keywords = [], {"expense": {}, "income": {}}
     for r in conn.execute("SELECT * FROM aliases ORDER BY kind, alias"):
         table = "accounts" if r["kind"] == "account" else "categories"
@@ -41,7 +42,8 @@ def cmd_context(args, conn):
             item["target_kind"] = target["kind"]
         aliases.append(item)
     open_debts = [{"id": d["id"], "direction": d["direction"], "person": d["person"],
-                   "remaining": debts.remaining(conn, d), "due_date": d["due_date"]}
+                   "remaining": debts.remaining(conn, d), "due_date": d["due_date"],
+                   "savings_loan": debts.is_savings_debt(d)}
                   for d in conn.execute("SELECT * FROM debts WHERE status = 'open' AND archived = 0 ORDER BY id")]
     recurring = []
     for r in conn.execute("SELECT * FROM recurring WHERE archived = 0 ORDER BY day_of_month, id"):
@@ -66,15 +68,17 @@ def cmd_context(args, conn):
     lines.append("Kategori pemasukan: " + ", ".join(categories["income"]) + ".")
     lines.append("Budget: " + ", ".join(f"{b['name']} {rupiah(b['balance'])}" for b in budget_items) + ".")
     if savings:
-        lines.append("Tabungan: " + ", ".join(f"{s['name']} {rupiah(s['balance'])}" for s in savings) + ".")
+        lines.append("Tabungan (terpisah dari dompet dan budget): "
+                     + ", ".join(f"{s['name']} {rupiah(s['balance'])}" for s in savings) + ".")
     if aliases:
         lines.append("Alias: " + ", ".join(f"{a['alias']} = {a['target']}" for a in aliases) + ".")
     n_kw = sum(len(words) for kind in keywords.values() for words in kind.values())
     lines.append(f"Kata kunci tebak kategori: {n_kw} (lihat data.keywords).")
     if open_debts:
+        label = lambda d: ("pinjaman dari tabungan" if d["savings_loan"] else  # noqa: E731
+                           "hutang ke" if d["direction"] == "i_owe" else "piutang dari")
         lines.append("Hutang/piutang terbuka: " + "; ".join(
-            f"#{d['id']} {'hutang ke' if d['direction'] == 'i_owe' else 'piutang dari'} {d['person']} "
-            f"{rupiah(d['remaining'])}" for d in open_debts) + ".")
+            f"#{d['id']} {label(d)} {d['person']} {rupiah(d['remaining'])}" for d in open_debts) + ".")
     if recurring:
         lines.append("Tagihan rutin: " + ", ".join(
             f"{r['name']} {rupiah(r['amount'])} tgl {r['day']}{' (lunas bulan ini)' if r['paid_this_month'] else ''}"

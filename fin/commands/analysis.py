@@ -70,6 +70,14 @@ def analyze_message(a):
     neg = a["budget_status"]["negative"]
     extra.append(f"Budget minus: {', '.join(neg)}." if neg else "Tidak ada budget yang minus.")
     lines.append(" ".join(extra))
+    sav = a["savings"]
+    if sav["accounts"]:
+        text = f"Tabungan {rupiah(sav['total'])}"
+        if sav["expense"]["count"]:
+            text += f"; pengeluaran dari tabungan (di luar angka di atas) {rupiah(sav['expense']['total'])}"
+        if sav["loans_outstanding"]:
+            text += f"; pinjaman tabungan belum dikembalikan {rupiah(sav['loans_outstanding'])}"
+        lines.append(text + ".")
     dbt = a["debts"]
     if dbt["debt_total"] or dbt["receivable_total"]:
         due = dbt["due_within_7_days"]

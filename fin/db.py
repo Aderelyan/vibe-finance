@@ -267,7 +267,96 @@ def _migrate_v3(conn):
             conn.execute(stmt)
 
 
-MIGRATIONS = {1: _migrate_v1, 2: _migrate_v2, 3: _migrate_v3}
+SCHEMA_V4 = """
+CREATE TABLE accounts_v4 (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  type TEXT NOT NULL CHECK (type IN ('cash','bank','ewallet','savings')),
+  is_default INTEGER NOT NULL DEFAULT 0 CHECK (is_default = 0 OR type != 'savings'),
+  archived INTEGER NOT NULL DEFAULT 0,
+  target_amount INTEGER,
+  target_date TEXT,
+  created_at TEXT NOT NULL
+);
+INSERT INTO accounts_v4(id, name, type, is_default, archived, created_at)
+  SELECT id, name, type, is_default, archived, created_at FROM accounts;
+DROP TABLE accounts;
+ALTER TABLE accounts_v4 RENAME TO accounts;
+
+CREATE TABLE transactions_v4 (
+  id INTEGER PRIMARY KEY,
+  ts TEXT NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('income','expense','transfer','adjustment','debt_in','debt_out',
+                                     'deposit','withdraw','savings_loan','savings_repay')),
+  amount INTEGER NOT NULL,
+  account_id INTEGER NOT NULL REFERENCES accounts(id),
+  to_account_id INTEGER REFERENCES accounts(id),
+  category_id INTEGER REFERENCES categories(id),
+  debt_id INTEGER REFERENCES debts(id),
+  budget_id INTEGER REFERENCES budgets(id),
+  note TEXT,
+  raw_text TEXT,
+  group_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  deleted_at TEXT
+);
+INSERT INTO transactions_v4(id, ts, type, amount, account_id, to_account_id, category_id, debt_id, budget_id, note,
+                            raw_text, group_id, created_at, deleted_at)
+  SELECT id, ts, type, amount, account_id, to_account_id, category_id, debt_id, budget_id, note,
+         raw_text, group_id, created_at, deleted_at FROM transactions;
+DROP TABLE transactions;
+ALTER TABLE transactions_v4 RENAME TO transactions;
+CREATE INDEX idx_tx_ts ON transactions(ts);
+CREATE INDEX idx_tx_account ON transactions(account_id);
+CREATE INDEX idx_tx_group ON transactions(group_id);
+
+ALTER TABLE debts ADD COLUMN savings_account_id INTEGER REFERENCES accounts(id)
+"""
+
+
+def _migrate_v4(conn):
+    """Tabungan menjadi akun (dompet) berjenis savings di luar invarian, bukan lagi budget.
+
+    Tabel accounts dan transactions dibangun ulang (jenis akun 'savings', target, jenis transaksi baru),
+    debts.savings_account_id ditambah. Budget tabungan lama (jika ada) diubah dengan aman: sisa saldonya
+    dikembalikan ke 'belum teralokasi' (uangnya memang ada di dompet operasional), budget itu diarsipkan, lalu
+    dibuat akun tabungan kosong bernama sama dengan target yang sama. Tidak ada uang yang dibuat-buat.
+    """
+    now = clock.now_ts()
+    for stmt in SCHEMA_V4.split(";"):
+        if stmt.strip():
+            conn.execute(stmt)
+    unalloc = conn.execute("SELECT id FROM budgets WHERE kind = 'unallocated'").fetchone()[0]
+    for bud in conn.execute("SELECT * FROM budgets WHERE kind = 'savings' ORDER BY id").fetchall():
+        bal = conn.execute(
+            "SELECT COALESCE((SELECT SUM(CASE WHEN type IN ('income','debt_in','adjustment') THEN amount "
+            "ELSE -amount END) FROM transactions WHERE deleted_at IS NULL AND budget_id = :b), 0) + "
+            "COALESCE((SELECT SUM(amount) FROM budget_moves WHERE deleted_at IS NULL AND to_budget_id = :b), 0) - "
+            "COALESCE((SELECT SUM(amount) FROM budget_moves WHERE deleted_at IS NULL AND from_budget_id = :b), 0)",
+            {"b": bud["id"]}).fetchone()[0]
+        if bal:
+            group = f"migrasi-v4-{bud['id']}"
+            conn.execute("INSERT INTO op_groups(group_id, action, undoable, created_at) VALUES (?, 'migration', 0, ?)",
+                         (group, now))
+            src, dst = (bud["id"], unalloc) if bal > 0 else (unalloc, bud["id"])
+            conn.execute("INSERT INTO budget_moves(ts, from_budget_id, to_budget_id, amount, note, group_id, "
+                         "created_at) VALUES (?,?,?,?,?,?,?)",
+                         (now, src, dst, abs(bal), f"migrasi tabungan {bud['name']} menjadi akun", group, now))
+        conn.execute("UPDATE budgets SET archived = 1 WHERE id = ?", (bud["id"],))
+        if bud["archived"]:
+            continue
+        name = bud["name"]
+        taken = {r[0].lower() for r in conn.execute("SELECT name FROM accounts")}
+        if name.lower() in taken:
+            name = f"{name} (tabungan)"
+            n = 2
+            while name.lower() in taken:
+                name, n = f"{bud['name']} (tabungan {n})", n + 1
+        conn.execute("INSERT INTO accounts(name, type, target_amount, target_date, created_at) "
+                     "VALUES (?, 'savings', ?, ?, ?)", (name, bud["target_amount"], bud["target_date"], now))
+
+
+MIGRATIONS = {1: _migrate_v1, 2: _migrate_v2, 3: _migrate_v3, 4: _migrate_v4}
 SCHEMA_VERSION = max(MIGRATIONS)
 
 

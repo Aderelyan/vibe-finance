@@ -29,18 +29,40 @@ class Fin:
         return obj
 
     def totals(self):
-        """(total dompet, total budget) dihitung langsung dari tabel, terpisah dari kode aplikasi."""
+        """(total dompet operasional, total budget) dihitung langsung dari tabel, terpisah dari kode aplikasi.
+
+        Tabungan (accounts.type = 'savings') tidak masuk total dompet. Ikut diperiksa: aturan budget_id per jenis
+        transaksi, kelas akun pada transfer/deposit/withdraw, dan tabungan tidak pernah jadi dompet default.
+        """
         import sqlite3
         conn = sqlite3.connect(self.home / "finance.db")
         try:
-            sign = "CASE WHEN type IN ('income','debt_in','adjustment') THEN amount ELSE -amount END"
-            wallets = conn.execute(f"SELECT COALESCE(SUM({sign}), 0) FROM transactions "
-                                   "WHERE deleted_at IS NULL AND type != 'transfer'").fetchone()[0]
-            budget_tx = conn.execute(f"SELECT COALESCE(SUM({sign}), 0) FROM transactions "
+            op = "(SELECT id FROM accounts WHERE type != 'savings')"
+            out_side = "CASE WHEN type IN ('income','debt_in','adjustment','savings_repay') THEN amount ELSE -amount END"
+            wallets = conn.execute(f"SELECT COALESCE(SUM({out_side}), 0) FROM transactions "
+                                   f"WHERE deleted_at IS NULL AND account_id IN {op}").fetchone()[0]
+            wallets += conn.execute(f"SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE deleted_at IS NULL "
+                                    f"AND type IN ('transfer','deposit','withdraw') AND to_account_id IN {op}"
+                                    ).fetchone()[0]
+            bsign = "CASE WHEN type IN ('income','debt_in','adjustment','withdraw') THEN amount ELSE -amount END"
+            budget_tx = conn.execute(f"SELECT COALESCE(SUM({bsign}), 0) FROM transactions "
                                      "WHERE deleted_at IS NULL AND budget_id IS NOT NULL").fetchone()[0]
-            missing = conn.execute("SELECT COUNT(*) FROM transactions WHERE (type = 'transfer') = "
-                                   "(budget_id IS NOT NULL)").fetchone()[0]
-            assert missing == 0, "budget_id harus terisi untuk semua transaksi selain transfer"
+            # budget_id wajib persis untuk transaksi yang mengubah total dompet operasional
+            wrong = conn.execute(
+                f"SELECT COUNT(*) FROM transactions t JOIN accounts a ON a.id = t.account_id "
+                f"LEFT JOIN accounts b ON b.id = t.to_account_id WHERE (t.budget_id IS NOT NULL) != ("
+                f"t.type IN ('deposit','withdraw') OR (t.type IN ('income','expense','adjustment','debt_in','debt_out') "
+                f"AND a.type != 'savings'))").fetchone()[0]
+            assert wrong == 0, "budget_id tidak sesuai aturan jenis transaksi/kelas akun"
+            mixed = conn.execute(
+                "SELECT COUNT(*) FROM transactions t JOIN accounts a ON a.id = t.account_id "
+                "JOIN accounts b ON b.id = t.to_account_id WHERE "
+                "(t.type = 'transfer' AND (a.type = 'savings') != (b.type = 'savings')) OR "
+                "(t.type = 'deposit' AND NOT (a.type != 'savings' AND b.type = 'savings')) OR "
+                "(t.type = 'withdraw' AND NOT (a.type = 'savings' AND b.type != 'savings'))").fetchone()[0]
+            assert mixed == 0, "kelas akun asal/tujuan salah"
+            assert conn.execute("SELECT COUNT(*) FROM accounts WHERE type = 'savings' AND is_default = 1"
+                                ).fetchone()[0] == 0
             return wallets, budget_tx  # pindahan budget selalu berjumlah nol
         finally:
             conn.close()
@@ -115,7 +137,7 @@ def fin_home(tmp_path, monkeypatch):
 
 @pytest.fixture
 def wallets(fin):
-    """Dompet tunai 150k (default), bri 500k, gopay 50k, dan tabungan (budget) bernama 'tabungan'."""
+    """Dompet tunai 150k (default), bri 500k, gopay 50k, dan tabungan kosong bernama 'tabungan' (target 2jt)."""
     fin.ok("account", "add", "tunai", "--type", "cash", "--opening", "150k", "--default")
     fin.ok("account", "add", "bri", "--type", "bank", "--opening", "500k")
     fin.ok("account", "add", "gopay", "--type", "ewallet", "--opening", "50k")

@@ -22,15 +22,22 @@ Linux/Mac `~/Documents/Manager/Finance/data`. `finance.py` dan `fin.sh` memakai 
 folder lain, set `FINANCE_HOME`.
 Backup otomatis dibuat pada operasi tulis pertama setiap hari, 30 file terakhir disimpan.
 
-## Konsep: dompet dan budget (sistem amplop)
+## Konsep: dompet, budget (sistem amplop), dan tabungan
 
-Uang yang sama dilihat dari dua sisi:
+Uang di dompet dilihat dari dua sisi:
 - **Dompet**: uangnya ada di mana (tunai, bri, gopay).
-- **Budget**: uangnya untuk apa (makan, transport, tabungan, `belum teralokasi`).
+- **Budget**: uangnya untuk apa (makan, transport, `belum teralokasi`).
 
-Total semua dompet selalu sama dengan total semua budget. Pemasukan dan saldo awal masuk ke `belum teralokasi`;
+Total dompet selalu sama dengan total budget. Pemasukan dan saldo awal masuk ke `belum teralokasi`;
 kamu sendiri yang membaginya lewat `budget alloc`. Pengeluaran mengurangi budget kategorinya, atau
-`belum teralokasi` jika kategori itu belum punya budget. Tabungan adalah budget, bukan dompet.
+`belum teralokasi` jika kategori itu belum punya budget.
+
+**Tabungan** adalah akun terpisah, di luar dompet dan budget, dengan saldo dan target sendiri. Menabung
+(`savings deposit`) memindahkan uang dari dompet ke tabungan dan mengurangi budget sumbernya; menarik
+(`savings withdraw`) kebalikannya. Belanja dari tabungan (`savings spend --mode purpose`) tidak mengurangi dompet
+maupun budget dan dilaporkan terpisah. Meminjam dari tabungan (`--mode debt`) dicatat sebagai hutang ke tabungan, dan
+baru menjadi pengeluaran saat dikembalikan dengan `debt pay`. `balance` menampilkan total dompet dan total tabungan
+sebagai dua angka terpisah.
 
 ## Status
 
@@ -43,6 +50,8 @@ kamu sendiri yang membaginya lewat `budget alloc`. Pengeluaran mengurangi budget
 - **Tahap 3 (selesai):** `analyze`, `daily-check`, `export` (.xlsx), `demo.py`.
 - **Tahap 4 (selesai):** `context`, `batch`, dan [`COMMANDS.md`](COMMANDS.md): referensi lengkap setiap perintah,
   opsi, contoh output asli, kode error, dan cara memetakan chat ke perintah.
+- **Perubahan 02 (selesai):** tabungan menjadi akun terpisah di luar budget (`savings deposit/withdraw/spend`),
+  skema v4. Lihat [`docs/PERUBAHAN-02.md`](docs/PERUBAHAN-02.md).
 
 ## Demo
 
@@ -62,13 +71,17 @@ python finance.py account add bri --type bank --opening 500k
 python finance.py add --type income --account bri --item "gajian|600k|gaji"
 
 python finance.py budget alloc --item "makan|300k" --item "transport|100k"
-python finance.py savings add "dana darurat" --target 5jt
-python finance.py budget alloc --item "dana darurat|100k"
 python finance.py budget move --from makan --to jajan --amount 50k
+
+python finance.py savings add "dana darurat" --target 5jt
+python finance.py savings deposit --from bri --to "dana darurat" --amount 100k
+python finance.py savings withdraw --from "dana darurat" --to tunai --amount 30k --to-budget makan
+python finance.py savings spend --from "dana darurat" --item "ban bocor|40k|transport" --mode purpose
+python finance.py savings spend --from "dana darurat" --item "servis motor|200k|transport" --mode debt
+python finance.py debt pay --person "dana darurat" --amount 100k
 
 python finance.py add --type expense --item "ayam goreng|15k|makan"
 python finance.py add --type expense --item "jajan|10k" --item "es teh|3k"
-python finance.py add --type expense --budget "dana darurat" --item "ban bocor|40k|transport"
 python finance.py transfer --from bri --to tunai --amount 200k --fee 2.5k
 python finance.py adjust --account bri --actual 450k
 

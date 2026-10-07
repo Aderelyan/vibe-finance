@@ -3,6 +3,7 @@ import calendar
 from datetime import timedelta
 
 from . import budgets, clock, debts
+from .ledger import balances
 from .output import percent
 from .parse import Period, add_months
 from .report import summarize
@@ -45,16 +46,18 @@ def _div(total, n):
 
 
 def _expense_rows(conn, period, columns):
+    """Pengeluaran dari dompet operasional saja; pengeluaran dari tabungan dilaporkan terpisah."""
     start, end = period.bounds()
     return conn.execute(f"SELECT {columns} FROM transactions t LEFT JOIN categories c ON c.id = t.category_id "
-                        "LEFT JOIN accounts a ON a.id = t.account_id "
-                        "WHERE t.deleted_at IS NULL AND t.type = 'expense' AND t.ts BETWEEN ? AND ?",
-                        (start, end)).fetchall()
+                        "JOIN accounts a ON a.id = t.account_id "
+                        "WHERE t.deleted_at IS NULL AND t.type = 'expense' AND a.type != 'savings' "
+                        "AND t.ts BETWEEN ? AND ?", (start, end)).fetchall()
 
 
 def daily_stats(conn, period):
-    rows = conn.execute("SELECT substr(ts, 1, 10) AS day, SUM(amount) AS amount, COUNT(*) AS count "
-                        "FROM transactions WHERE deleted_at IS NULL AND type = 'expense' AND ts BETWEEN ? AND ? "
+    rows = conn.execute("SELECT substr(t.ts, 1, 10) AS day, SUM(t.amount) AS amount, COUNT(*) AS count "
+                        "FROM transactions t JOIN accounts a ON a.id = t.account_id WHERE t.deleted_at IS NULL "
+                        "AND t.type = 'expense' AND a.type != 'savings' AND t.ts BETWEEN ? AND ? "
                         "GROUP BY day ORDER BY amount DESC, day", period.bounds()).fetchall()
     total = sum(r["amount"] for r in rows)
     days = period.days()
@@ -87,7 +90,7 @@ def frequent_small(conn, period):
 def budget_status(conn, period):
     spent = {r["budget_id"]: r["amount"] for r in conn.execute(
         "SELECT budget_id, SUM(amount) AS amount FROM transactions WHERE deleted_at IS NULL AND type = 'expense' "
-        "AND ts BETWEEN ? AND ? GROUP BY budget_id", period.bounds())}
+        "AND budget_id IS NOT NULL AND ts BETWEEN ? AND ? GROUP BY budget_id", period.bounds())}
     ov = budgets.overview(conn)
     shown = {b["id"] for b in ov["budgets"]}
     items = [{"name": b["name"], "kind": b["kind"], "balance": b["balance"], "archived": b["archived"],
@@ -113,11 +116,21 @@ def projection(conn, period, expense_total):
             "projected_expense": _div(expense_total * month_days, elapsed)}
 
 
+def savings_status(conn, period):
+    """Saldo tiap tabungan dan pengeluaran dari tabungan pada periode itu (terpisah dari pengeluaran dompet)."""
+    bals = balances(conn)
+    items = [{"name": r["name"], "balance": bals[r["id"]], "target_amount": r["target_amount"]}
+             for r in conn.execute("SELECT * FROM accounts WHERE type = 'savings' AND archived = 0 ORDER BY id")]
+    return {"accounts": items, "total": sum(i["balance"] for i in items),
+            "expense": summarize(conn, period, "expense", source="savings"),
+            "loans_outstanding": debts.savings_loans_total(conn)}
+
+
 def debt_status(conn):
     owe, owed = debts.totals(conn)
     due = []
     for d in conn.execute("SELECT * FROM debts WHERE status = 'open' AND archived = 0 AND due_date IS NOT NULL "
-                          "ORDER BY due_date, id").fetchall():
+                          "AND savings_account_id IS NULL ORDER BY due_date, id").fetchall():
         days = debts.days_until(d["due_date"])
         if days <= DUE_SOON_DAYS:
             due.append({"id": d["id"], "direction": d["direction"], "person": d["person"],
@@ -155,5 +168,6 @@ def analyze(conn, period):
         "frequent_small": frequent_small(conn, period),
         "budget_status": budget_status(conn, period),
         "projection": projection(conn, period, exp["total"]),
+        "savings": savings_status(conn, period),
         "debts": debt_status(conn),
     }

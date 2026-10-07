@@ -1,19 +1,36 @@
-"""Hitungan hutang piutang. Sisa selalu dihitung dari transaksi pembayaran."""
+"""Hitungan hutang piutang. Sisa selalu dihitung dari transaksi pembayaran.
+
+Hutang ke tabungan (savings spend --mode debt) adalah hutang i_owe dengan savings_account_id terisi dan person =
+nama tabungan. Pembukanya savings_loan, pembayarannya savings_repay. Hutang ini internal: tidak dihitung di total
+hutang ke orang lain maupun kekayaan bersih (saldo tabungan sudah berkurang).
+"""
 from datetime import date
 
 from . import clock, resolve
 from .output import FinError, fmt_date, rupiah
 
-# jenis transaksi yang dihitung sebagai pembayaran untuk tiap arah
+# jenis transaksi yang dihitung sebagai pembayaran / pembuka untuk tiap arah (hutang biasa)
 PAYMENT_TYPE = {"i_owe": "debt_out", "owed_to_me": "debt_in"}
 OPENING_TYPE = {"i_owe": "debt_in", "owed_to_me": "debt_out"}
 DIRECTION_LABEL = {"i_owe": "hutang", "owed_to_me": "piutang"}
 
 
+def is_savings_debt(debt):
+    return debt["savings_account_id"] is not None
+
+
+def payment_type(debt):
+    return "savings_repay" if is_savings_debt(debt) else PAYMENT_TYPE[debt["direction"]]
+
+
+def opening_type(debt):
+    return "savings_loan" if is_savings_debt(debt) else OPENING_TYPE[debt["direction"]]
+
+
 def paid(conn, debt):
     row = conn.execute("SELECT COALESCE(SUM(amount), 0) FROM transactions "
                        "WHERE debt_id = ? AND type = ? AND deleted_at IS NULL",
-                       (debt["id"], PAYMENT_TYPE[debt["direction"]])).fetchone()
+                       (debt["id"], payment_type(debt))).fetchone()
     return row[0]
 
 
@@ -30,9 +47,13 @@ def recompute_status(conn, debt_id):
 
 
 def totals(conn):
-    """(total hutang saya, total piutang) dari hutang yang masih terbuka dan tidak dihapus."""
+    """(total hutang saya ke orang lain, total piutang) dari hutang terbuka yang tidak dihapus.
+
+    Hutang ke tabungan sendiri tidak ikut; lihat savings_loans_total().
+    """
     owe = owed = 0
-    for debt in conn.execute("SELECT * FROM debts WHERE status = 'open' AND archived = 0").fetchall():
+    for debt in conn.execute("SELECT * FROM debts WHERE status = 'open' AND archived = 0 "
+                             "AND savings_account_id IS NULL").fetchall():
         rest = max(remaining(conn, debt), 0)
         if debt["direction"] == "i_owe":
             owe += rest
@@ -41,9 +62,22 @@ def totals(conn):
     return owe, owed
 
 
+def savings_loans_total(conn, savings_account_id=None):
+    """Sisa pinjaman dari tabungan yang belum dikembalikan (semua tabungan, atau satu tabungan)."""
+    sql = "SELECT * FROM debts WHERE status = 'open' AND archived = 0 AND savings_account_id IS NOT NULL"
+    params = ()
+    if savings_account_id is not None:
+        sql += " AND savings_account_id = ?"
+        params = (savings_account_id,)
+    return sum(max(remaining(conn, d), 0) for d in conn.execute(sql, params).fetchall())
+
+
 def title(debt, cap=False):
-    """'hutang ke Budi' / 'piutang dari Andi'. cap=True: huruf pertama kalimat saja yang dibesarkan."""
-    text = ("hutang ke " if debt["direction"] == "i_owe" else "piutang dari ") + debt["person"]
+    """'hutang ke Budi' / 'piutang dari Andi' / 'pinjaman dari tabungan laptop'. cap=True: huruf pertama kalimat."""
+    if is_savings_debt(debt):
+        text = "pinjaman dari tabungan " + debt["person"]
+    else:
+        text = ("hutang ke " if debt["direction"] == "i_owe" else "piutang dari ") + debt["person"]
     return text[0].upper() + text[1:] if cap else text
 
 
@@ -69,18 +103,22 @@ def info(conn, debt):
     """Ringkasan satu hutang sebagai dict untuk data JSON."""
     p = paid(conn, debt)
     has_tx = conn.execute("SELECT 1 FROM transactions WHERE debt_id = ? AND type = ? AND deleted_at IS NULL",
-                          (debt["id"], OPENING_TYPE[debt["direction"]])).fetchone() is not None
+                          (debt["id"], opening_type(debt))).fetchone() is not None
     days_left = days_until(debt["due_date"]) if debt["due_date"] else None
     return {"id": debt["id"], "direction": debt["direction"], "person": debt["person"],
             "principal": debt["principal"], "paid": p, "remaining": debt["principal"] - p,
             "status": debt["status"], "due_date": debt["due_date"], "days_until_due": days_left,
             "note": debt["note"], "cash": has_tx, "archived": bool(debt["archived"]),
+            "savings": debt["person"] if is_savings_debt(debt) else None,
             "created_at": debt["created_at"]}
 
 
 def line(item):
     """'#3 hutang ke Budi: sisa Rp30.000 dari Rp50.000, jatuh tempo ...'"""
-    who = f"hutang ke {item['person']}" if item["direction"] == "i_owe" else f"piutang dari {item['person']}"
+    if item["savings"]:
+        who = f"pinjaman dari tabungan {item['person']}"
+    else:
+        who = f"hutang ke {item['person']}" if item["direction"] == "i_owe" else f"piutang dari {item['person']}"
     text = f"#{item['id']} {who}: "
     if item["status"] == "paid":
         text += f"lunas ({rupiah(item['principal'])})"

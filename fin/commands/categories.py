@@ -72,7 +72,7 @@ def _ensure_name_free(conn, name, kind, except_id=None):
         clash = budgets.name_taken(conn, name)
         if clash and not (clash["kind"] == "category" and clash["category_id"] == except_id):
             raise FinError("BAD_ARGS", f"Nama '{name}' sudah dipakai budget {budgets.KIND_LABEL[clash['kind']]}.",
-                           hint="Kategori pengeluaran dan tabungan tidak boleh bernama sama. Pakai nama lain.")
+                           hint="Nama budget harus unik. Pakai nama lain.")
 
 
 def _protect(cat, action):

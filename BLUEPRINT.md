@@ -92,17 +92,20 @@ Repo: `https://github.com/Aderelyan/vibe-finance.git` (publik), branch `main`. `
 
 ## 5. Skema database
 
-Versi skema saat ini: **3**. Migrasi berurutan berdasarkan `meta.schema_version`. Sebelum migrasi database yang sudah ada, dibuat backup `finance-YYYYMMDD-pre-vN.db`.
+Versi skema saat ini: **4**. Tabel `accounts`, `transactions`, dan `debts` di bawah sudah dalam bentuk v4 (lihat migrasi v4). Migrasi berurutan berdasarkan `meta.schema_version`. Sebelum migrasi database yang sudah ada, dibuat backup `finance-YYYYMMDD-pre-vN.db`.
 
 ```sql
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);          -- schema_version, last_backup_date
 
+-- dompet operasional (cash/bank/ewallet) dan tabungan (savings) berbagi satu tabel dan satu ruang nama
 CREATE TABLE accounts (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  type TEXT NOT NULL CHECK (type IN ('cash','bank','ewallet')),
-  is_default INTEGER NOT NULL DEFAULT 0,
+  type TEXT NOT NULL CHECK (type IN ('cash','bank','ewallet','savings')),
+  is_default INTEGER NOT NULL DEFAULT 0 CHECK (is_default = 0 OR type != 'savings'),
   archived INTEGER NOT NULL DEFAULT 0,     -- 1 = sudah dihapus tapi punya riwayat
+  target_amount INTEGER,                   -- hanya savings
+  target_date TEXT,                        -- hanya savings
   created_at TEXT NOT NULL
 );
 
@@ -132,15 +135,16 @@ CREATE TABLE debts (
   note TEXT,
   status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','paid')),   -- dihitung ulang dari pembayaran
   created_at TEXT NOT NULL,
-  archived INTEGER NOT NULL DEFAULT 0      -- v3: 1 = dihapus tapi punya transaksi
+  archived INTEGER NOT NULL DEFAULT 0,     -- v3: 1 = dihapus tapi punya transaksi
+  savings_account_id INTEGER REFERENCES accounts(id)   -- v4: terisi = pinjaman dari tabungan ini
 );
 
 CREATE TABLE budgets (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  kind TEXT NOT NULL CHECK (kind IN ('unallocated','category','savings')),
+  kind TEXT NOT NULL CHECK (kind IN ('unallocated','category','savings')),  -- 'savings' hanya sisa lama (diarsipkan)
   category_id INTEGER UNIQUE REFERENCES categories(id),   -- hanya kind category
-  target_amount INTEGER,                                  -- hanya kind savings
+  target_amount INTEGER,                                  -- tidak dipakai lagi sejak v4
   target_date TEXT,
   archived INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
@@ -149,13 +153,14 @@ CREATE TABLE budgets (
 CREATE TABLE transactions (
   id INTEGER PRIMARY KEY,
   ts TEXT NOT NULL,                 -- waktu kejadian
-  type TEXT NOT NULL CHECK (type IN ('income','expense','transfer','adjustment','debt_in','debt_out')),
+  type TEXT NOT NULL CHECK (type IN ('income','expense','transfer','adjustment','debt_in','debt_out',
+                                     'deposit','withdraw','savings_loan','savings_repay')),
   amount INTEGER NOT NULL,          -- > 0, kecuali adjustment yang boleh negatif
   account_id INTEGER NOT NULL REFERENCES accounts(id),
-  to_account_id INTEGER REFERENCES accounts(id),   -- hanya transfer
-  category_id INTEGER REFERENCES categories(id),   -- hanya income/expense
-  debt_id INTEGER REFERENCES debts(id),            -- hanya debt_in/debt_out
-  budget_id INTEGER REFERENCES budgets(id),        -- wajib untuk semua tipe kecuali transfer
+  to_account_id INTEGER REFERENCES accounts(id),   -- hanya transfer, deposit, withdraw
+  category_id INTEGER REFERENCES categories(id),   -- income/expense; savings_loan (kategori barang)
+  debt_id INTEGER REFERENCES debts(id),            -- debt_in/debt_out/savings_loan/savings_repay
+  budget_id INTEGER REFERENCES budgets(id),        -- lihat aturan budget_id di bagian 6
   note TEXT,
   raw_text TEXT,                    -- teks asli dari pengguna, jika ada
   group_id TEXT NOT NULL,           -- satu pemanggilan = satu group, dipakai untuk undo
@@ -164,6 +169,7 @@ CREATE TABLE transactions (
 );
 CREATE INDEX idx_tx_ts ON transactions(ts);
 CREATE INDEX idx_tx_account ON transactions(account_id);
+CREATE INDEX idx_tx_group ON transactions(group_id);
 
 CREATE TABLE budget_moves (
   id INTEGER PRIMARY KEY,
@@ -220,27 +226,33 @@ Data awal saat database dibuat:
 
 **Migrasi v2 → v3**: `debts.archived` ditambah. Tabel `recurring` dibangun ulang (`archived = 1 - active`, `amount > 0`, `created_at`), lalu `recurring_payments` dibuat.
 
+**Migrasi v3 → v4** (tabungan menjadi akun terpisah, `docs\PERUBAHAN-02.md`): tabel `accounts` dibangun ulang (jenis `savings`, `target_amount`, `target_date`, tabungan tidak boleh default), tabel `transactions` dibangun ulang (jenis transaksi baru, indeks `group_id`), `debts.savings_account_id` ditambah. Budget tabungan lama (jika ada) diubah dengan aman: saldonya dikembalikan ke `belum teralokasi` lewat pindahan budget yang tidak bisa di-undo (uangnya memang ada di dompet operasional), budget itu diarsipkan, lalu dibuat akun tabungan kosong bernama dan bertarget sama (jika nama sudah dipakai dompet, diberi akhiran ` (tabungan)`). Tidak ada uang yang dibuat-buat atau hilang; pengguna lalu mengisinya dengan `savings deposit`.
+
 Aktifkan `PRAGMA foreign_keys = ON`. Setiap perintah tulis berjalan dalam satu transaksi database, supaya tidak ada data setengah tersimpan.
 
 ## 6. Aturan bisnis
 
-**Saldo dompet** = jumlah dari transaksi yang tidak terhapus:
-- tambah: `income`, `debt_in`, `adjustment` (bertanda), `transfer` yang masuk ke dompet itu
-- kurang: `expense`, `debt_out`, `transfer` yang keluar dari dompet itu
+**Saldo akun** (dompet maupun tabungan) = jumlah dari transaksi yang tidak terhapus:
+- tambah: `income`, `debt_in`, `adjustment` (bertanda), `savings_repay` di akun itu; `transfer`, `deposit`, `withdraw` yang masuk ke akun itu (`to_account_id`)
+- kurang: `expense`, `debt_out`, `savings_loan` di akun itu; `transfer`, `deposit`, `withdraw` yang keluar dari akun itu (`account_id`)
 
 Saldo boleh negatif (tidak ditolak), tetapi `message` harus memberi peringatan.
 
-**Pengeluaran** di laporan = hanya `type = expense`. **Pemasukan** = hanya `type = income`. Transfer, hutang, penyesuaian, alokasi dan pindahan budget tidak pernah dihitung sebagai pengeluaran atau pemasukan.
+**Pengeluaran** di laporan = hanya `type = expense`. **Pemasukan** = hanya `type = income`. Transfer, hutang, penyesuaian, alokasi dan pindahan budget, menabung, dan menarik tabungan tidak pernah dihitung sebagai pengeluaran atau pemasukan. Pengeluaran dari tabungan (`expense` di akun tabungan) dilaporkan terpisah dari pengeluaran dompet di `report`, `analyze`, dan `export`.
 
-**Transfer**: satu baris `transfer`. Biaya admin dicatat sebagai baris `expense` terpisah berkategori "biaya admin" dengan `group_id` yang sama. Tarik tunai adalah transfer dari bank ke tunai. Transfer ke dompet yang sama ditolak. Transfer tidak mengubah budget apa pun.
+**Transfer**: satu baris `transfer`, hanya antar dompet operasional (tabungan memakai `savings deposit/withdraw`). Biaya admin dicatat sebagai baris `expense` terpisah berkategori "biaya admin" dengan `group_id` yang sama. Tarik tunai adalah transfer dari bank ke tunai. Transfer ke dompet yang sama ditolak. Transfer tidak mengubah budget apa pun.
 
-**Saldo awal dan koreksi**: `adjustment`. Perintah `adjust` menerima saldo sebenarnya (boleh 0), script menghitung selisihnya sendiri. Selisihnya masuk ke atau keluar dari `belum teralokasi`.
+**Saldo awal dan koreksi**: `adjustment`. Perintah `adjust` menerima saldo sebenarnya (boleh 0), script menghitung selisihnya sendiri. Untuk dompet, selisihnya masuk ke atau keluar dari `belum teralokasi`; untuk tabungan, budget tidak berubah.
 
 ### Budget sistem amplop
 
 Uang yang sama dilihat dari dua sisi: **dompet** (uangnya ada di mana) dan **budget** (uangnya untuk apa).
 
-**Aturan utama: total semua dompet selalu sama dengan total semua budget**, setelah perintah apa pun. Ini dijaga karena setiap transaksi selain transfer menunjuk ke tepat satu budget (`budget_id`), dan pindahan budget selalu berpasangan.
+**Aturan utama: total dompet operasional (cash/bank/ewallet) selalu sama dengan total semua budget**, setelah perintah apa pun. Tabungan tidak ikut. Ini dijaga karena setiap transaksi yang mengubah total dompet operasional menunjuk ke tepat satu budget (`budget_id`), transaksi lain tidak punya budget, dan pindahan budget selalu berpasangan. Aturan `budget_id` (diperiksa di `insert_tx` dan di tes langsung dari tabel):
+- wajib: `deposit`, `withdraw`, serta `income`/`expense`/`adjustment`/`debt_in`/`debt_out` di dompet operasional;
+- kosong: `transfer`, `savings_loan`, `savings_repay`, serta `expense`/`adjustment` di tabungan.
+
+Saldo budget: `income`, `debt_in`, `adjustment`, `withdraw` menambah; `expense`, `debt_out`, `deposit` mengurangi. Setiap jenis transaksi seimbang sendiri antara dompet operasional dan budget, jadi aturan utama tetap benar setelah `delete` atau `undo` transaksi mana pun.
 
 1. Budget sistem `belum teralokasi` tidak bisa dihapus, ditutup, atau diganti nama.
 2. Pemasukan selalu masuk ke `belum teralokasi`. Tidak ada alokasi otomatis. Saldo awal dompet juga masuk ke sini.
@@ -253,12 +265,29 @@ Uang yang sama dilihat dari dua sisi: **dompet** (uangnya ada di mana) dan **bud
 9. Hutang piutang: uang masuk menambah `belum teralokasi` (`--budget` ditolak). Uang keluar mengurangi `belum teralokasi`, kecuali diberi `--budget`.
 10. Riwayat tidak ditulis ulang. Transaksi lama tetap tercatat pada budget yang berlaku saat dibuat.
 11. `edit` yang mengganti kategori memindahkan transaksi itu ke budget kategori barunya (atau `belum teralokasi`).
-12. `--budget <nama>` pada `add` dan `edit` pengeluaran memaksa pengeluaran diambil dari budget tertentu, termasuk tabungan.
+12. `--budget <nama>` pada `add` dan `edit` pengeluaran memaksa pengeluaran diambil dari budget tertentu. Tabungan bukan budget (`UNKNOWN_BUDGET` dengan hint ke perintah `savings`).
 13. Budget yang ditutup tetapi masih punya sisa (karena transaksi lamanya diubah atau dihapus) tetap tampil dengan tanda "(ditutup)", dan bisa ditutup lagi untuk mengembalikan sisanya.
 
 Saldo budget = jumlah bertanda transaksi yang menunjuk ke budget itu, ditambah pindahan masuk, dikurangi pindahan keluar. Yang terhapus tidak dihitung. Saldo budget tidak disimpan.
 
-**Tabungan** adalah budget berjenis `savings`, bukan dompet. Uangnya tetap berada di dompet mana pun. Boleh ada banyak tabungan. Menabung = `budget alloc` atau `budget move` ke tabungan. Menarik tabungan = `budget move` dari tabungan. Menabung bukan pengeluaran dan tidak mengurangi total uang. Nama tabungan tidak boleh sama dengan nama kategori pengeluaran (keduanya nama budget).
+### Tabungan (sejak skema v4, `docs\PERUBAHAN-02.md`)
+
+**Tabungan** adalah akun berjenis `savings`: dompet terpisah dengan saldo sendiri (dihitung dari transaksi) dan target opsional, di luar aturan utama. Bukan budget, tidak pernah jadi dompet default, dan tidak bisa dipakai `add`, `transfer`, `debt add`, `recurring`. Nama tabungan dan dompet berbagi satu ruang nama. Boleh ada banyak tabungan.
+
+| Perintah | Transaksi | Dompet operasional | Tabungan | Budget |
+|---|---|---|---|---|
+| `savings add --opening X` | `adjustment` di tabungan | – | +X | – |
+| `savings deposit --from D --to T --amount X [--from-budget B]` | `deposit` | D −X | T +X | B −X (bawaan `belum teralokasi`); ditolak `BAD_AMOUNT` jika saldo B kurang dari X |
+| `savings withdraw --from T --to D --amount X [--to-budget B]` | `withdraw` | D +X | T −X | B +X (bawaan `belum teralokasi`) |
+| `savings spend --mode purpose` | `expense` di tabungan | – | −X | – |
+| `savings spend --mode debt` | `savings_loan` + hutang `i_owe` ke tabungan | – | −X | – |
+| `debt pay` pinjaman tabungan dari D [`--budget B`] | `expense` di D + `savings_repay` di T | D −X | T +X | B −X (bawaan budget kategori barangnya) |
+| `adjust --account T` | `adjustment` di tabungan | – | ±X | – |
+
+- `withdraw` dan `spend` ditolak (`BAD_AMOUNT`, `error.data.savings_balance`) jika saldo tabungan tidak cukup. Saldo tabungan tidak pernah dibuat minus oleh perintah ini (hanya `adjust` dan penghapusan transaksi yang bisa).
+- `spend --mode purpose`: pengeluaran dengan sumber tabungan, tidak memotong dompet maupun budget, dilaporkan terpisah dari pengeluaran dompet.
+- `spend --mode debt`: satu hutang per item (`direction = i_owe`, `person` = nama tabungan, `savings_account_id` terisi, catatan = catatan item). Belum menjadi pengeluaran. Saat dilunasi lewat `debt pay` (boleh sebagian), dompet dan budget berkurang, tabungan bertambah, dan pengeluaran tercatat di kategori barangnya. Hutang ini internal: tidak masuk total hutang ke orang lain maupun kekayaan bersih; ditampilkan sebagai "pinjaman dari tabungan". `debt rename` ditolak (nama mengikuti tabungan; `savings rename` ikut mengganti nama di pinjamannya).
+- `edit`: dompet hanya bisa diganti dengan akun sekelas (dompet dengan dompet, tabungan dengan tabungan); pengeluaran dari tabungan tidak bisa diberi `--budget`; nominal `savings_loan`/`savings_repay` tidak bisa diubah (sama seperti hutang).
 
 ### Hapus, ganti nama, aktifkan kembali
 
@@ -270,7 +299,9 @@ Berlaku untuk dompet, kategori, budget, tabungan:
 
 Hapus dompet yang masih berisi ditolak dengan `NOT_EMPTY` dan `hint` dua pilihan: `--move-to <dompet>` (sisa dipindah lewat transfer) atau `--write-off` (sisa dinolkan lewat penyesuaian, `belum teralokasi` ikut berubah). Menghapus dompet default ditolak sampai default dipindah, kecuali tinggal satu dompet.
 
-Hapus kategori yang punya budget: budget itu ditutup dulu (sisa kembali ke `belum teralokasi`). Hapus tabungan: sisanya kembali ke `belum teralokasi`, lalu mengikuti aturan hapus di atas.
+Hapus kategori yang punya budget: budget itu ditutup dulu (sisa kembali ke `belum teralokasi`).
+
+Hapus tabungan: ditolak (`NOT_EMPTY`) selama masih ada pinjaman tabungan yang belum dikembalikan. Saldo tidak nol butuh `--move-to <dompet>` (lewat `withdraw`, masuk ke `belum teralokasi`), `--move-to <tabungan lain>` (lewat `transfer` antar tabungan), atau `--write-off` (penyesuaian di tabungan, budget tidak berubah). Lalu mengikuti aturan hapus di atas; undo mengaktifkannya kembali tanpa menjadikannya default.
 
 **Undo**: membatalkan pencatatan uang terakhir, yaitu group terakhir di `op_groups` yang masih punya transaksi atau pindahan budget aktif. Urutannya gabungan antara transaksi dan pindahan budget. Jika group itu juga mengarsipkan sesuatu (hapus dompet dengan `--move-to`/`--write-off`, tutup budget, hapus kategori atau tabungan yang bersaldo), undo mengaktifkannya kembali. Perubahan pengaturan tanpa uang (tambah, ganti nama, hapus yang kosong) tidak di-undo.
 
@@ -293,7 +324,7 @@ Hapus kategori yang punya budget: budget itu ditutup dulu (sisa kembali ke `belu
 - Hapus: belum pernah dibayar = dihapus sungguhan; sudah pernah = diarsipkan. `recurring add` dengan nama yang diarsipkan mengaktifkannya kembali dengan nilai baru.
 - Dompet atau kategori tagihan yang sudah dihapus menghasilkan `UNKNOWN_ACCOUNT`/`UNKNOWN_CATEGORY` saat `pay`, dengan hint `recurring set`.
 
-**Total**: `balance` tanpa argumen menampilkan dua bagian. Per dompet: saldo tiap dompet dan total dompet. Per budget: `belum teralokasi`, budget kategori, tabungan, subtotal tabungan, subtotal di luar tabungan, total budget. Lalu total hutang, total piutang, dan kekayaan bersih (total + piutang − hutang). `data` memuat `total_dompet`, `total_budget`, dan `consistent`.
+**Total**: `balance` tanpa argumen menampilkan dompet dan tabungan sebagai dua angka terpisah. Per dompet: saldo tiap dompet operasional dan total dompet. Per budget: `belum teralokasi`, budget kategori, total budget (= total dompet). Tabungan: saldo tiap tabungan dan total tabungan, plus pinjaman tabungan yang belum dikembalikan. Lalu total hutang, total piutang, dan kekayaan bersih (dompet + tabungan + piutang − hutang ke orang lain). `data` memuat `accounts` (hanya dompet), `savings`, `total_dompet`, `total_tabungan`, `total_budget`, `consistent` (total dompet = total budget), `savings_loans_total`.
 
 **Periode** (dipakai `report`, `list`, `analyze`, `export`, `budget history`):
 - `today`, `yesterday`, `this-week` (Senin sampai hari ini), `last-week`, `this-month`, `last-month`, `YYYY-MM`, `last:N`, `all`, atau `--from` dan `--to`.
@@ -348,13 +379,16 @@ Output selalu satu objek JSON di stdout, tidak ada teks lain:
 | `delete <id>` | Soft delete. |
 | `undo` | Batalkan pencatatan uang terakhir (transaksi atau alokasi/pindahan budget). `message` menyebut apa yang dibatalkan. |
 | `budget list` | Semua budget dan saldonya, lalu total dan pemeriksaan total dompet = total budget. |
-| `budget alloc --item "budget\|jumlah" [--item ...] [--note]` | Alokasi dari `belum teralokasi` ke satu atau banyak budget (kategori pengeluaran atau tabungan). Satu `group_id`, semua atau tidak sama sekali. |
+| `budget alloc --item "budget\|jumlah" [--item ...] [--note]` | Alokasi dari `belum teralokasi` ke satu atau banyak budget kategori pengeluaran. Satu `group_id`, semua atau tidak sama sekali. |
 | `budget move --from --to --amount\|all [--note]` | Pindah antar budget mana pun. |
 | `budget close <nama>` | Sisa (plus atau minus) kembali ke `belum teralokasi`, budget ditutup. Kategorinya tetap ada. |
 | `budget history [--budget] [--period] [--limit]` | Riwayat alokasi dan pindahan. |
-| `savings add <nama> [--target] [--target-date]` | Buat tabungan, atau aktifkan kembali. |
-| `savings list` | Saldo, target, persen tercapai, kekurangan, perubahan bersih bulan ini, lalu total. |
-| `savings set-target <nama> [--target] [--target-date] [--clear]` / `savings rename` / `savings remove` | Kelola tabungan. |
+| `savings add <nama> [--target] [--target-date] [--opening]` | Buat tabungan (akun terpisah), atau aktifkan kembali. |
+| `savings list [--all]` | Saldo, target, persen tercapai, kekurangan, perubahan bersih bulan ini, pinjaman belum dikembalikan, lalu total. |
+| `savings set <nama> [--target] [--target-date] [--clear]` / `savings rename` / `savings remove [--move-to \| --write-off]` | Kelola tabungan. |
+| `savings deposit --from <dompet> --to <tabungan> --amount [--from-budget] [--date] [--note] [--raw]` | Menabung. Lihat bagian 6, Tabungan. |
+| `savings withdraw --from <tabungan> --to <dompet> --amount\|all [--to-budget] [--date] [--note] [--raw]` | Menarik tabungan. |
+| `savings spend --from <tabungan> --item ... [--item ...] --mode purpose\|debt [--date] [--raw]` | Belanja dari tabungan, atau pinjam dari tabungan. |
 | `debt add --direction i_owe\|owed_to_me --person --amount [--account] [--budget] [--due] [--note] [--date] [--no-cash \| --paid-for "catatan\|kategori"] [--raw]` | Catat hutang atau piutang. |
 | `debt pay (--person \| --id) [--direction] --amount\|all [--account] [--budget] [--date] [--note] [--raw]` | Catat pembayaran. Jika satu orang punya lebih dari satu hutang terbuka dan `--id` tidak diberikan, kembalikan `AMBIGUOUS_DEBT` beserta daftar ID. |
 | `debt list [--status open\|paid\|all] [--person] [--direction] [--all]` | Daftar dengan sisa dan jatuh tempo, total hutang dan piutang, yang jatuh tempo dalam 7 hari. |
@@ -416,7 +450,9 @@ Detail perhitungan (`fin/analysis.py`):
 - Aturan utama: ratusan perintah acak dengan seed tetap, total dompet = total budget setelah setiap perintah.
 - Pemasukan selalu ke `belum teralokasi`; pengeluaran kategori tanpa budget memakai `belum teralokasi`, setelah diberi alokasi memakai budget kategorinya, transaksi lama tidak berubah.
 - `budget alloc` banyak item: semua atau tidak sama sekali. Budget minus dan `belum teralokasi` minus: peringatan, bukan error.
-- `budget close` dan `savings remove` mengembalikan sisa dengan benar, termasuk sisa minus. `--budget` pada `add`, termasuk dari tabungan.
+- `budget close` mengembalikan sisa dengan benar, termasuk sisa minus. `--budget` pada `add`.
+- Tabungan: deposit, withdraw, spend purpose, spend debt lalu lunas (sebagian dan penuh), saldo tabungan atau budget sumber tidak cukup, undo tiap operasi, hapus (`--move-to` dompet/tabungan, `--write-off`, pinjaman belum lunas), laporan memisahkan pengeluaran dari tabungan. Tes invarian acak mencakup operasi tabungan dan memeriksa total tabungan dari tabel.
+- Migrasi dari database versi 3 yang berisi budget tabungan bersaldo.
 - `account remove`: tanpa transaksi (hapus sungguhan), dengan transaksi (arsip), berisi tanpa opsi (`NOT_EMPTY`), `--move-to`, `--write-off`. `category remove` pada kategori yang punya budget dan pada kategori sistem (`SYSTEM_PROTECTED`). `adjust --actual 0`.
 - Migrasi dari database versi 1 yang berisi dompet `savings` dan beberapa transaksi.
 - Hutang: bayar sebagian, lunas, bayar berlebih ditolak, dua hutang untuk orang yang sama, `--no-cash`, `--paid-for` (saldo tetap, pengeluaran di laporan, undo sekaligus), undo, hapus.
@@ -426,7 +462,7 @@ Detail perhitungan (`fin/analysis.py`):
 - `analyze` pada periode kosong tidak error; periode sebelumnya, rata-rata, pengeluaran kecil, budget minus, proyeksi. `daily-check` pagi dan malam. `export` (sheet, header, format angka, `--out`).
 - Setiap perintah, termasuk saat argumen salah, mengeluarkan JSON yang sah.
 
-**`demo.py`**: script yang membuat database baru di folder sementara, menjalankan skenario dua bulan (kira-kira 40 transaksi, dua dompet, alokasi budget, satu tabungan, satu hutang, satu piutang), lalu mencetak hasil `balance`, `report`, `budget list`, `savings list`, `debt list`, dan `analyze`. Angka akhir di demo harus diperiksa juga oleh sebuah tes.
+**`demo.py`**: script yang membuat database baru di folder sementara, menjalankan skenario dua bulan (kira-kira 45 transaksi, dua dompet, alokasi budget, satu tabungan yang diisi tiap bulan dan dipakai sekali, satu hutang, satu piutang), lalu mencetak hasil `balance`, `report`, `budget list`, `savings list`, `debt list`, dan `analyze`. Angka akhir di demo harus diperiksa juga oleh sebuah tes.
 
 **Skenario wajib lolos** (masuk ke tes sebagai tes end-to-end lewat subprocess):
 
@@ -437,7 +473,7 @@ Detail perhitungan (`fin/analysis.py`):
 | Jajan 10k dan es teh 3k | `add --type expense --item "jajan\|10k\|jajan" --item "es teh\|3k\|jajan"` |
 | Jajan, parkir, makan total 50k | `add --type expense --item "jajan, parkir, makan\|50k\|makan"` |
 | Alokasikan makan 300k, transport 100k | `budget alloc --item "makan\|300k" --item "transport\|100k"` |
-| Nabung 100k | `budget alloc --item "tabungan\|100k"` |
+| Nabung 100k | `savings deposit --from bri --to tabungan --amount 100k` |
 | Pindah 50k dari makan ke jajan | `budget move --from makan --to jajan --amount 50k` |
 | Sisa budget saya | `budget list` |
 | Tabungan saya saat ini | `savings list` |
@@ -467,7 +503,7 @@ Pengguna membuat dompet, kategori, budget, dan tabungannya sendiri lewat perinta
 
 **Tahap 1: Inti.** (selesai) Struktur project, `db.py` dan migrasi, `parse_amount`, pembungkus JSON, lalu `init`, `account`, `category`, `alias`, `add`, `transfer`, `adjust`, `balance`, `report`, `list`, `edit`, `delete`, `undo`, backup otomatis, beserta tesnya.
 
-**Tahap 1.5: Repo GitHub, kustomisasi penuh, budget amplop, tabungan.** (selesai) Lihat `docs\PERUBAHAN-01.md`.
+**Tahap 1.5: Repo GitHub, kustomisasi penuh, budget amplop, tabungan.** (selesai) Lihat `docs\PERUBAHAN-01.md`. Model tabungan diganti menjadi akun terpisah setelah Tahap 4: `docs\PERUBAHAN-02.md`.
 
 **Tahap 2: Hutang dan tagihan rutin.** (selesai) `debt` dan `recurring` dengan pola kustomisasi yang sama (tambah, ganti nama, hapus, daftar), beserta tesnya.
 Checkpoint: beri pengguna sekitar 10 perintah terminal untuk dicoba sendiri, lengkap dengan hasil yang seharusnya muncul.

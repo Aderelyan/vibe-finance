@@ -1,13 +1,14 @@
 """budget list / alloc / move / close / history"""
 from .. import budgets
 from ..db import UNALLOCATED, write
-from ..ledger import balances as account_balances, new_group
+from ..ledger import new_group, operational_total
 from ..output import FinError, fmt_ts, rupiah, success
 from ..parse import parse_amount
 from .common import add_period_args, period_from_args
 from .transactions import _with_item_prefix
 
-ALLOC_HINT = 'Format --item "budget|jumlah", contoh --item "makan|300k". Budget boleh kategori pengeluaran atau tabungan.'
+ALLOC_HINT = ('Format --item "budget|jumlah", contoh --item "makan|300k". Budget adalah kategori pengeluaran; '
+              'untuk menabung pakai savings deposit.')
 
 
 def register(sub):
@@ -48,10 +49,9 @@ def overview_message(conn, ov, total_dompet):
     if groups["category"]:
         lines.append("Budget kategori:")
         lines += ["  " + budgets.line(i) for i in groups["category"]]
-    if groups["savings"]:
-        lines.append("Tabungan:")
+    if groups["savings"]:  # sisa budget tabungan lama (sebelum skema v4) yang masih bersaldo
+        lines.append("Budget tabungan lama:")
         lines += ["  " + budgets.line(i) for i in groups["savings"]]
-    lines.append(f"Total tabungan: {rupiah(ov['savings_total'])} | Di luar tabungan: {rupiah(ov['non_savings_total'])}")
     lines.append(f"Total budget: {rupiah(ov['total_budget'])}")
     if ov["total_budget"] != total_dompet:
         lines.append(f"PERINGATAN: total budget tidak sama dengan total dompet ({rupiah(total_dompet)}).")
@@ -63,7 +63,7 @@ def overview_message(conn, ov, total_dompet):
 
 def cmd_list(args, conn):
     ov = budgets.overview(conn)
-    total_dompet = sum(account_balances(conn).values())
+    total_dompet = operational_total(conn)
     lines = ["Budget:"] + overview_message(conn, ov, total_dompet)
     return success("\n".join(lines), {**ov, "total_dompet": total_dompet,
                                       "consistent": total_dompet == ov["total_budget"]})

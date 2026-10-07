@@ -41,11 +41,13 @@ def register(sub):
 
 
 def _ensure_name_free(conn, name, except_id=None):
+    """Nama dompet dan tabungan berbagi satu ruang nama (keduanya tabel accounts)."""
     key = resolve.norm(name)
-    for row in conn.execute("SELECT id, name FROM accounts"):
+    for row in conn.execute("SELECT id, name, type FROM accounts"):
         if row["id"] != except_id and resolve.norm(row["name"]) == key:
-            raise FinError("BAD_ARGS", f"Dompet bernama '{row['name']}' sudah ada.",
-                           hint="Pakai nama lain, atau lihat daftar dengan: account list --all")
+            what = "Tabungan" if row["type"] == "savings" else "Dompet"
+            raise FinError("BAD_ARGS", f"{what} bernama '{row['name']}' sudah ada.",
+                           hint="Pakai nama lain, atau lihat daftar dengan: account list --all / savings list --all")
     for row in conn.execute("SELECT al.alias, a.name, a.id FROM aliases al JOIN accounts a ON a.id = al.target_id "
                             "WHERE al.kind = 'account'"):
         if row["id"] != except_id and resolve.norm(row["alias"]) == key:
@@ -65,6 +67,9 @@ def _has_default(conn):
 def cmd_add(args, conn):
     name = resolve.clean_name(args.name, "nama dompet")
     existing = resolve.find_account(conn, name)  # dompet yang dihapus (diarsipkan) akan diaktifkan kembali
+    if existing is not None and existing["type"] == "savings":
+        raise FinError("BAD_ARGS", f"Nama '{existing['name']}' sudah dipakai tabungan.",
+                       hint="Pakai nama lain untuk dompet ini.")
     if existing is None or not existing["archived"]:
         _ensure_name_free(conn, name)
     opening = None
@@ -109,7 +114,7 @@ def cmd_add(args, conn):
 
 def cmd_list(args, conn):
     bals = balances(conn)
-    sql = "SELECT * FROM accounts" + ("" if args.all else " WHERE archived = 0") + " ORDER BY id"
+    sql = "SELECT * FROM accounts WHERE type != 'savings'" + ("" if args.all else " AND archived = 0") + " ORDER BY id"
     rows = conn.execute(sql).fetchall()
     if not rows:
         return success("Belum ada dompet. Tambahkan dengan: account add <nama> --type cash|bank|ewallet "
@@ -144,14 +149,14 @@ def _is_used(conn, acc_id):
 
 def cmd_remove(args, conn):
     acc = resolve.find_account(conn, args.name)
-    if acc is None:
-        resolve.account(conn, args.name)  # melempar UNKNOWN_ACCOUNT dengan hint
+    if acc is None or acc["type"] == "savings":
+        resolve.account(conn, args.name)  # melempar UNKNOWN_ACCOUNT dengan hint (tabungan: pakai savings remove)
     bal = balance(conn, acc["id"])
     if acc["archived"] and bal == 0:
         raise FinError("UNKNOWN_ACCOUNT", f"Dompet '{acc['name']}' sudah dihapus.",
                        hint=resolve._account_hint(conn))
-    others = [r["name"] for r in conn.execute("SELECT name FROM accounts WHERE archived = 0 AND id != ? ORDER BY id",
-                                              (acc["id"],))]
+    others = [r["name"] for r in conn.execute("SELECT name FROM accounts WHERE archived = 0 AND type != 'savings' "
+                                              "AND id != ? ORDER BY id", (acc["id"],))]
     if acc["is_default"] and others:
         raise FinError("BAD_ARGS", f"Dompet {acc['name']} adalah dompet default.",
                        hint=f"Pindahkan default dulu, contoh: account set-default {others[0]}")

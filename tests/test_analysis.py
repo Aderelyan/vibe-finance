@@ -142,7 +142,8 @@ def test_export(wallets, tmp_path):
     amounts = [c.value for c in ws["D"][1:]]
     assert all(isinstance(v, int) for v in amounts) and ws["D2"].number_format == "#,##0"
     acc = wb["Saldo dompet"]
-    assert [row[2].value for row in acc.iter_rows(min_row=2)][-1] == 700_000 - 23_000 + 50_000
+    totals = {row[0].value: row[2].value for row in acc.iter_rows(min_row=2) if str(row[0].value).startswith("TOTAL")}
+    assert totals == {"TOTAL DOMPET": 700_000 - 23_000 + 50_000, "TOTAL TABUNGAN": 0}
     assert wb["Hutang piutang"]["C2"].value == "Budi" and wb["Hutang piutang"]["F2"].value == 50_000
 
     out = tmp_path / "sub" / "laporan.xlsx"

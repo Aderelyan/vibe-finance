@@ -23,7 +23,8 @@ def test_batch_runs_all_in_one_group(wallets, tmp_path):
     fin.ok("recurring", "add", "kos", "--amount", "500k", "--day", "5")
     path = write_batch(tmp_path, [
         {"cmd": "add", "args": {"type": "income", "account": "bri", "item": ["gajian|1jt|gaji"]}},
-        {"cmd": "budget alloc", "args": {"item": ["makan|300k", "tabungan|100k"]}},
+        {"cmd": "budget alloc", "args": {"item": ["makan|300k"]}},
+        {"cmd": "savings deposit", "args": {"from": "bri", "to": "tabungan", "amount": "100k"}},
         {"cmd": "add", "args": {"type": "expense", "item": "ayam goreng|15k|makan", "raw": "ayam goreng 15k"}},
         {"cmd": "transfer", "args": {"from": "bri", "to": "tunai", "amount": 200000, "fee": "2.5k"}},
         {"cmd": "debt add", "args": {"direction": "i_owe", "person": "Budi", "amount": "30k",
@@ -32,25 +33,27 @@ def test_batch_runs_all_in_one_group(wallets, tmp_path):
         {"cmd": "budget move", "args": {"from": "makan", "to": "jajan", "amount": "50k"}},
         {"cmd": "recurring pay", "args": {"name": "kos", "account": "bri"}},
         {"cmd": "adjust", "args": {"account": "gopay", "actual": "0"}},
+        {"cmd": "savings spend", "args": {"from": "tabungan", "item": "helm|20k|belanja", "mode": "debt"}},
     ])
     before = fin.ok("balance")["data"]
     n = fin.count_tx()
     r = fin.ok("batch", "--file", path)
     d = r["data"]
-    assert d["count"] == 9 and d["group_id"]
+    assert d["count"] == 11 and d["group_id"]
     assert {res["data"]["group_id"] for res in d["results"] if "group_id" in res["data"]} == {d["group_id"]}
-    assert r["message"].startswith("9 perintah dari batch tercatat sekaligus")
+    assert r["message"].startswith("11 perintah dari batch tercatat sekaligus")
     assert bud(fin, "makan") == 300_000 - 15_000 - 30_000 - 50_000
     assert bud(fin, "jajan") == 50_000
-    assert fin.balance("bri") == 500_000 + 1_000_000 - 200_000 - 2_500 - 500_000
-    assert fin.balance("gopay") == 0
+    assert fin.balance("bri") == 500_000 + 1_000_000 - 100_000 - 200_000 - 2_500 - 500_000
+    assert fin.balance("gopay") == 0 and fin.balance("tabungan") == 80_000
     assert fin.ok("debt", "list")["data"]["debts"][0]["remaining"] == 20_000
     assert fin.ok("recurring", "list")["data"]["recurring"][0]["this_month"]["paid"] is True
-    assert d["results"][2]["data"]["items"][0]["note"] == "ayam goreng"
+    assert d["results"][3]["data"]["items"][0]["note"] == "ayam goreng"
 
     r = fin.ok("undo")
-    assert r["data"]["action"] == "batch" and r["data"]["removed"][0]["table"] == "debts"
-    assert fin.count_tx() == n
+    assert r["data"]["action"] == "batch" and len(r["data"]["removed"]) == 2  # hutang Budi dan pinjaman tabungan
+    assert fin.count_tx() == n and fin.balance("tabungan") == 0
+    assert fin.ok("debt", "list", "--status", "all")["data"]["count"] == 0
     after = fin.ok("balance")["data"]
     saldo = lambda data: {b["name"]: b["balance"] for b in data["budgets"] if b["balance"]}  # noqa: E731
     assert after["total_dompet"] == before["total_dompet"] and saldo(after) == saldo(before)
@@ -122,12 +125,17 @@ def test_batch_values(wallets, tmp_path):
         {"cmd": "adjust", "args": {"account": "tunai", "actual": "-5k", "note": "koreksi"}},
         {"cmd": "debt add", "args": {"direction": "i_owe", "person": "Citra", "amount": 20000, "no_cash": True,
                                      "account": None, "date": False}},
-        {"cmd": "add", "args": {"type": "expense", "item": ["a|1k", "b|2k"], "budget": "tabungan"}},
+        {"cmd": "add", "args": {"type": "expense", "item": ["a|1k", "b|2k"], "budget": "belum teralokasi"}},
+        {"cmd": "savings deposit", "args": {"from": "bri", "to": "tabungan", "amount": 50000}},
+        {"cmd": "savings withdraw", "args": {"from": "tabungan", "to": "tunai", "amount": "all",
+                                             "to_budget": "makan"}},
     ])
     r = fin.ok("batch", "--file", path)
-    assert fin.balance("tunai") == -5_000 - 3_000
+    assert fin.balance("tunai") == -5_000 - 3_000 + 50_000
     assert r["data"]["results"][1]["data"]["debt"]["cash"] is False
-    assert r["data"]["results"][2]["data"]["items"][0]["budget"] == "tabungan"
+    assert r["data"]["results"][2]["data"]["items"][0]["budget"] == "belum teralokasi"
+    assert r["data"]["results"][4]["data"]["amount"] == 50_000 and fin.balance("tabungan") == 0
+    assert bud(fin, "makan") == 50_000
 
 
 def test_batch_without_changes_has_no_group(wallets, tmp_path):
@@ -160,7 +168,8 @@ def test_batch_stdin_subprocess_utf8_bom(fin, tmp_path):
 def test_context(wallets):
     fin = wallets
     fin.ok("alias", "add", "--kind", "account", "--alias", "cash", "--target", "tunai")
-    fin.ok("budget", "alloc", "--item", "makan|100k", "--item", "tabungan|50k")
+    fin.ok("budget", "alloc", "--item", "makan|100k")
+    fin.ok("savings", "deposit", "--from", "bri", "--to", "tabungan", "--amount", "50k")
     fin.ok("debt", "add", "--direction", "i_owe", "--person", "Budi", "--amount", "20k")
     fin.ok("recurring", "add", "kos", "--amount", "500k", "--day", "5")
     fin.ok("category", "remove", "hiburan", "--kind", "expense")
@@ -171,7 +180,10 @@ def test_context(wallets):
     assert d["default_account"] == "tunai"
     assert "hiburan" not in d["categories"]["expense"] and "gaji" in d["categories"]["income"]
     assert {"name": "makan", "kind": "category", "balance": 100_000} in d["budgets"]
-    assert d["savings"] == [{"name": "tabungan", "balance": 50_000, "target_amount": 2_000_000, "target_date": None}]
+    assert d["savings"] == [{"name": "tabungan", "balance": 50_000, "target_amount": 2_000_000, "target_date": None,
+                             "loans_outstanding": 0}]
+    assert all(a["type"] != "savings" for a in d["accounts"]) and len(d["accounts"]) == 3
+    assert all(b["kind"] != "savings" for b in d["budgets"])
     assert d["aliases"] == [{"kind": "account", "alias": "cash", "target": "tunai"}]
     assert "kopi" in d["keywords"]["expense"]["jajan"] and "hiburan" not in d["keywords"]["expense"]
     assert d["open_debts"][0]["person"] == "Budi" and d["recurring"][0]["name"] == "kos"

@@ -101,18 +101,18 @@ Lingkungan:
 | Kode | Arti | Yang sebaiknya dilakukan pemanggil |
 |---|---|---|
 | `BAD_ARGS` | Argumen tidak sah: opsi salah atau kurang, kombinasi opsi yang tidak boleh, format `--item` salah, nama sudah dipakai, sesuatu yang dilarang aturan (misalnya membayar tagihan dua kali di bulan yang sama). | Baca `message` dan `hint`, perbaiki perintahnya. |
-| `BAD_AMOUNT` | Nominal tidak bisa dibaca, nol, negatif (jika tidak boleh), atau terlalu besar. | Tanyakan ulang nominalnya ke pengguna. |
+| `BAD_AMOUNT` | Nominal tidak bisa dibaca, nol, negatif (jika tidak boleh), atau terlalu besar; atau saldo tabungan / budget sumber tidak cukup untuk `savings` (`error.data` berisi saldonya). | Tanyakan ulang nominalnya ke pengguna. |
 | `BAD_DATE` | Tanggal tidak bisa dibaca, atau tanggal transaksi di masa depan. | Pakai `YYYY-MM-DD`, `today`, atau `yesterday`. |
 | `BAD_PERIOD` | Periode tidak dikenal, terbalik, atau di masa depan. | Pakai salah satu bentuk periode di bawah. |
-| `UNKNOWN_ACCOUNT` | Dompet tidak ada atau sudah dihapus. `hint` berisi daftar dompet yang sah. | Pilih dari `hint`, atau tanyakan ke pengguna. Jangan membuat dompet baru diam-diam. |
+| `UNKNOWN_ACCOUNT` | Dompet atau tabungan tidak ada atau sudah dihapus, atau jenisnya salah (tabungan dipakai di tempat dompet, atau sebaliknya). `hint` berisi daftar yang sah. | Pilih dari `hint`, atau tanyakan ke pengguna. Jangan membuat dompet baru diam-diam. |
 | `UNKNOWN_CATEGORY` | Kategori tidak ada atau sudah dihapus. `hint` berisi daftar kategori. | Pilih dari `hint`, atau kosongkan kategori supaya ditebak. |
-| `UNKNOWN_BUDGET` | Budget atau tabungan tidak ada, sudah ditutup, atau kategori itu belum punya budget. | Lihat `hint`; kategori tanpa budget bisa diberi alokasi dulu. |
+| `UNKNOWN_BUDGET` | Budget tidak ada, sudah ditutup, atau kategori itu belum punya budget. Nama tabungan dipakai sebagai budget juga menghasilkan ini (tabungan bukan budget). | Lihat `hint`; kategori tanpa budget bisa diberi alokasi dulu; untuk tabungan pakai perintah `savings`. |
 | `NOT_FOUND` | Transaksi, alias, hutang, atau tagihan rutin yang dimaksud tidak ada. | Cek ID atau nama lewat perintah `list`. |
 | `NO_DEFAULT_ACCOUNT` | Dompet tidak disebut dan belum ada dompet default. | Sebutkan `--account`, atau atur `account set-default`. |
 | `AMBIGUOUS_DEBT` | Satu orang punya lebih dari satu hutang/piutang yang cocok. `error.data.candidates` berisi daftar ID beserta sisanya. | Tanyakan yang mana, lalu ulangi dengan `--id`. |
 | `OVERPAYMENT` | Pembayaran melebihi sisa hutang, atau hutangnya sudah lunas. `error.data.remaining` berisi sisa. | Tawarkan membayar sebesar sisa (`--amount all`). |
 | `NOTHING_TO_UNDO` | Tidak ada pencatatan uang yang bisa dibatalkan. | Sampaikan ke pengguna. |
-| `NOT_EMPTY` | Menghapus dompet atau hutang yang masih bersisa tanpa opsi penyelesaian. `hint` berisi pilihannya. | Tanyakan pilihan ke pengguna. |
+| `NOT_EMPTY` | Menghapus dompet, tabungan, atau hutang yang masih bersisa tanpa opsi penyelesaian, atau tabungan yang masih punya pinjaman. `hint` berisi pilihannya. | Tanyakan pilihan ke pengguna. |
 | `SYSTEM_PROTECTED` | Mencoba menghapus, menutup, atau mengganti nama milik sistem (`belum teralokasi`, kategori `lainnya`, `biaya admin`). | Sampaikan bahwa itu tidak bisa diubah. |
 | `INTERNAL` | Kesalahan tak terduga di program. Perubahan dibatalkan. | Laporkan ke pengembang. |
 
@@ -174,7 +174,8 @@ Akhir periode tidak pernah melewati hari ini. Rentang tanggal persisnya selalu a
 | Opsi | Format | Contoh |
 |---|---|---|
 | `add --item` | `catatan\|jumlah` atau `catatan\|jumlah\|kategori` | `"ayam goreng\|15k\|makan"`, `"es teh\|3k"` |
-| `budget alloc --item` | `budget\|jumlah` | `"makan\|300k"`, `"dana darurat\|100k"` |
+| `budget alloc --item` | `budget\|jumlah` | `"makan\|300k"`, `"transport\|100k"` |
+| `savings spend --item` | sama dengan `add --item` | `"kacamata\|40k\|kesehatan"` |
 | `debt add --paid-for` | `catatan` atau `catatan\|kategori` | `"makan siang\|makan"`, `"bakso"` |
 
 - `--item` boleh diulang; semua item satu pemanggilan disimpan bersama atau tidak sama sekali.
@@ -208,7 +209,7 @@ python finance.py init
   "data": {
     "path": "<FINANCE_HOME>\\finance.db",
     "created": true,
-    "schema_version": 3,
+    "schema_version": 4,
     "accounts": 0,
     "categories": 18
   }
@@ -481,7 +482,7 @@ pengeluarannya memakai `belum teralokasi` sampai diberi alokasi.
 
 | Opsi | Wajib | Keterangan |
 |---|---|---|
-| `<name>` | ya | Nama kategori. Kategori pengeluaran tidak boleh bernama sama dengan tabungan. |
+| `<name>` | ya | Nama kategori. |
 | `--kind expense\|income` | ya | Jenis kategori. |
 
 ```bat
@@ -500,7 +501,7 @@ python finance.py category add kucing --kind expense
 }
 ```
 
-Error: `BAD_ARGS` (sudah ada, bentrok dengan alias atau tabungan), `SYSTEM_PROTECTED` (nama `belum teralokasi`).
+Error: `BAD_ARGS` (sudah ada, bentrok dengan alias atau nama budget lain), `SYSTEM_PROTECTED` (nama `belum teralokasi`).
 
 ### `category list`
 
@@ -753,7 +754,7 @@ jika ada yang minus.
 | `--type income\|expense` | ya | Jenis. |
 | `--item "catatan\|jumlah\|kategori"` | ya, boleh diulang | Kategori opsional (ditebak). |
 | `--account <dompet>` | | Bawaan: dompet default (disebut di `message`). |
-| `--budget <budget>` | | Khusus pengeluaran: ambil dari budget ini (termasuk tabungan), bukan budget kategorinya. |
+| `--budget <budget>` | | Khusus pengeluaran: ambil dari budget ini, bukan budget kategorinya. (Belanja dari tabungan: `savings spend`.) |
 | `--date <tanggal>` | | Waktu transaksi. |
 | `--raw <teks>` | | Teks asli dari pengguna, disimpan untuk pencarian. |
 
@@ -897,7 +898,8 @@ tidak ada yang tersimpan.
 ### `transfer`
 
 Memindah uang antar dompet, termasuk tarik tunai. Tidak mengubah budget. Biaya admin dicatat sebagai pengeluaran
-kategori `biaya admin` dari dompet asal, dalam group yang sama.
+kategori `biaya admin` dari dompet asal, dalam group yang sama. Tabungan tidak bisa dipakai di sini (`UNKNOWN_ACCOUNT`);
+pakai `savings deposit` atau `savings withdraw`.
 
 | Opsi | Wajib | Keterangan |
 |---|---|---|
@@ -936,8 +938,9 @@ Error: `UNKNOWN_ACCOUNT`, `BAD_AMOUNT`, `BAD_DATE`, `BAD_ARGS` (dompet asal = tu
 
 ### `adjust`
 
-Menyamakan saldo dompet dengan kenyataan. Script menghitung selisihnya sendiri dan mencatatnya sebagai penyesuaian
-(bukan pemasukan/pengeluaran); selisih itu masuk ke atau keluar dari `belum teralokasi`.
+Menyamakan saldo dompet atau tabungan dengan kenyataan. Script menghitung selisihnya sendiri dan mencatatnya sebagai
+penyesuaian (bukan pemasukan/pengeluaran). Untuk dompet, selisih itu masuk ke atau keluar dari `belum teralokasi`;
+untuk tabungan, budget tidak berubah.
 
 | Opsi | Wajib | Keterangan |
 |---|---|---|
@@ -959,6 +962,7 @@ python finance.py adjust --account bri --actual 450k
     "difference": -497500,
     "id": 12,
     "group_id": "<acak>",
+    "savings": false,
     "unallocated_balance": 722000
   }
 }
@@ -1004,7 +1008,8 @@ python finance.py edit 5 --amount 18k --note "ayam geprek"
       "note": "ayam goreng",
       "raw_text": "beli ayam goreng 15k",
       "group_id": "<acak>",
-      "deleted_at": null
+      "deleted_at": null,
+      "source": "wallet"
     },
     "after": {
       "id": 5,
@@ -1019,7 +1024,8 @@ python finance.py edit 5 --amount 18k --note "ayam geprek"
       "note": "ayam geprek",
       "raw_text": "beli ayam goreng 15k",
       "group_id": "<acak>",
-      "deleted_at": null
+      "deleted_at": null,
+      "source": "wallet"
     },
     "changes": [
       {
@@ -1071,7 +1077,8 @@ python finance.py delete 8
       "note": "es teh",
       "raw_text": null,
       "group_id": "<acak>",
-      "deleted_at": "2026-10-06 12:00:00"
+      "deleted_at": "2026-10-06 12:00:00",
+      "source": "wallet"
     },
     "remaining_in_group": [
       7
@@ -1120,7 +1127,8 @@ python finance.py undo
         "note": "penyesuaian saldo",
         "raw_text": null,
         "group_id": "<acak>",
-        "deleted_at": null
+        "deleted_at": null,
+        "source": "wallet"
       }
     ]
   }
@@ -1135,12 +1143,15 @@ Error: `NOTHING_TO_UNDO`.
 
 ### `balance`
 
-Tanpa `--account`: saldo per dompet, per budget (`belum teralokasi`, budget kategori, tabungan, subtotal), total,
-hutang, piutang, dan kekayaan bersih. `data.consistent` true jika total dompet = total budget.
+Tanpa `--account`: saldo per dompet dan total dompet, per budget (`belum teralokasi`, budget kategori) dan total
+budget, lalu per tabungan dan total tabungan (terpisah), pinjaman tabungan yang belum dikembalikan,
+hutang, piutang, dan kekayaan bersih (dompet + tabungan + piutang − hutang). `data.consistent` true jika total
+dompet = total budget (tabungan tidak ikut). `data.accounts` hanya dompet; tabungan ada di `data.savings` dan
+`data.total_tabungan`.
 
 | Opsi | Wajib | Keterangan |
 |---|---|---|
-| `--account <dompet>` | | Hanya satu dompet (dompet yang dihapus juga bisa dilihat). |
+| `--account <dompet>` | | Hanya satu dompet atau tabungan (yang dihapus juga bisa dilihat). |
 
 ```bat
 python finance.py balance --account bri
@@ -1152,7 +1163,8 @@ python finance.py balance --account bri
   "data": {
     "account": "bri",
     "type": "bank",
-    "balance": 947500
+    "balance": 947500,
+    "savings": false
   }
 }
 ```
@@ -1163,7 +1175,7 @@ python finance.py balance
 ```json
 {
   "ok": true,
-  "message": "Per dompet (uangnya di mana):\n- tunai (tunai): Rp272.000\n- bri (bank): Rp947.500\nTotal dompet: Rp1.219.500\n\nPer budget (uangnya untuk apa):\n- belum teralokasi: Rp1.219.500\nTotal tabungan: Rp0 | Di luar tabungan: Rp1.219.500\nTotal budget: Rp1.219.500",
+  "message": "Dompet (uang untuk dipakai):\n- tunai (tunai): Rp272.000\n- bri (bank): Rp947.500\nTotal dompet: Rp1.219.500\n\nPer budget (uang di dompet untuk apa):\n- belum teralokasi: Rp1.219.500\nTotal budget: Rp1.219.500\n\nTabungan (terpisah, di luar budget):\n- belum ada tabungan\nTotal tabungan: Rp0\n\nKekayaan bersih (dompet + tabungan + piutang − hutang): Rp1.219.500",
   "data": {
     "accounts": [
       {
@@ -1181,7 +1193,9 @@ python finance.py balance
         "archived": false
       }
     ],
+    "savings": [],
     "total_dompet": 1219500,
+    "total_tabungan": 0,
     "budgets": [
       {
         "id": 1,
@@ -1192,11 +1206,10 @@ python finance.py balance
       }
     ],
     "total_budget": 1219500,
-    "savings_total": 0,
-    "non_savings_total": 1219500,
     "consistent": true,
     "debt_total": 0,
     "receivable_total": 0,
+    "savings_loans_total": 0,
     "net_worth": 1219500
   }
 }
@@ -1207,7 +1220,10 @@ Error: `UNKNOWN_ACCOUNT` (dompet tidak ada, atau belum ada dompet sama sekali).
 ### `report`
 
 Total dan rincian per kategori (nominal, persen, jumlah transaksi). Hanya `income` dan `expense` yang dihitung;
-transfer, hutang, penyesuaian, dan alokasi budget tidak pernah masuk.
+transfer, hutang, penyesuaian, alokasi budget, menabung, dan menarik tabungan tidak pernah masuk. Angka utama adalah
+pengeluaran dari dompet; pengeluaran dari tabungan (`savings spend --mode purpose`) dilaporkan terpisah di
+`data.savings_expense` dan di baris tersendiri pada `message`. Dengan `--account <tabungan>`, laporannya tentang
+tabungan itu saja.
 
 | Opsi | Wajib | Keterangan |
 |---|---|---|
@@ -1259,7 +1275,12 @@ python finance.py report --period this-month --type expense
         "percent": 3.1,
         "count": 1
       }
-    ]
+    ],
+    "savings_expense": {
+      "total": 0,
+      "count": 0,
+      "by_category": []
+    }
   }
 }
 ```
@@ -1276,7 +1297,7 @@ Daftar transaksi terbaru dulu, beserta ID.
 | `--from <YYYY-MM-DD>` | | Awal rentang bebas. |
 | `--to <YYYY-MM-DD>` | | Akhir rentang bebas. |
 | `--search <teks>` | | Cari di catatan dan teks asli. |
-| `--type <jenis>` | | `income`, `expense`, `transfer`, `adjustment`, `debt_in`, `debt_out`. |
+| `--type <jenis>` | | `income`, `expense`, `transfer`, `adjustment`, `debt_in`, `debt_out`, `deposit` (menabung), `withdraw` (tarik tabungan), `savings_loan` (pinjam dari tabungan), `savings_repay` (kembali ke tabungan). |
 | `--account <dompet>` | | Transaksi yang menyentuh dompet ini. |
 | `--category <kategori>` | | Hanya kategori ini. |
 | `--limit <n>` | | 1 sampai 1000, bawaan 50. |
@@ -1313,7 +1334,8 @@ python finance.py list --period this-month --limit 3
         "note": "biaya admin transfer bri ke tunai",
         "raw_text": null,
         "group_id": "<acak>",
-        "deleted_at": null
+        "deleted_at": null,
+        "source": "wallet"
       },
       {
         "id": 10,
@@ -1328,7 +1350,8 @@ python finance.py list --period this-month --limit 3
         "note": null,
         "raw_text": null,
         "group_id": "<acak>",
-        "deleted_at": null
+        "deleted_at": null,
+        "source": "wallet"
       },
       {
         "id": 7,
@@ -1343,7 +1366,8 @@ python finance.py list --period this-month --limit 3
         "note": "jajan",
         "raw_text": null,
         "group_id": "<acak>",
-        "deleted_at": null
+        "deleted_at": null,
+        "source": "wallet"
       }
     ]
   }
@@ -1370,7 +1394,7 @@ python finance.py budget list
 ```json
 {
   "ok": true,
-  "message": "Budget:\n- belum teralokasi: Rp1.219.500\nTotal tabungan: Rp0 | Di luar tabungan: Rp1.219.500\nTotal budget: Rp1.219.500",
+  "message": "Budget:\n- belum teralokasi: Rp1.219.500\nTotal budget: Rp1.219.500",
   "data": {
     "budgets": [
       {
@@ -1382,8 +1406,6 @@ python finance.py budget list
       }
     ],
     "total_budget": 1219500,
-    "savings_total": 0,
-    "non_savings_total": 1219500,
     "total_dompet": 1219500,
     "consistent": true
   }
@@ -1394,12 +1416,12 @@ Error: tidak ada yang khusus.
 
 ### `budget alloc`
 
-Alokasi dari `belum teralokasi` ke satu atau banyak budget (kategori pengeluaran atau tabungan). Satu group; jika
+Alokasi dari `belum teralokasi` ke satu atau banyak budget kategori pengeluaran. Satu group; jika
 satu item salah, tidak ada yang tersimpan.
 
 | Opsi | Wajib | Keterangan |
 |---|---|---|
-| `--item "budget\|jumlah"` | ya, boleh diulang | Nama budget, kategori pengeluaran, atau tabungan. |
+| `--item "budget\|jumlah"` | ya, boleh diulang | Nama budget atau kategori pengeluaran. (Menabung: `savings deposit`.) |
 | `--note <teks>` | | Catatan. |
 
 ```bat
@@ -1435,7 +1457,7 @@ Error: `BAD_AMOUNT`, `UNKNOWN_BUDGET`, `BAD_ARGS` (format item, alokasi ke `belu
 
 ### `budget move`
 
-Memindah saldo antar budget mana pun, termasuk ke/dari tabungan dan `belum teralokasi`.
+Memindah saldo antar budget mana pun, termasuk ke/dari `belum teralokasi`. Tabungan bukan budget.
 
 | Opsi | Wajib | Keterangan |
 |---|---|---|
@@ -1550,17 +1572,34 @@ Error: `BAD_PERIOD`, `UNKNOWN_BUDGET`, `BAD_ARGS` (`--limit`).
 
 ### Tabungan
 
-Tabungan adalah budget berjenis tabungan, bukan dompet; uangnya tetap ada di dompet mana pun. Menabung =
-`budget alloc` atau `budget move` ke tabungan. Menarik = `budget move` dari tabungan. Membelanjakan langsung =
-`add --type expense --budget "<tabungan>"`.
+Tabungan adalah **akun terpisah** (jenis `savings`), bukan dompet operasional dan bukan budget. Saldonya dihitung
+dari transaksinya sendiri dan **tidak ikut aturan utama**: total dompet operasional (cash/bank/ewallet) selalu sama
+dengan total budget, sedangkan tabungan berdiri sendiri. Tabungan tidak bisa jadi dompet default dan tidak bisa
+dipakai di `add`, `transfer`, `debt add`, atau `recurring`; untuk uang masuk/keluar tabungan pakai perintah di bawah.
+
+| Aksi | Dompet operasional | Tabungan | Budget | Masuk laporan pengeluaran |
+|---|---|---|---|---|
+| `savings deposit` (menabung) | berkurang | bertambah | budget sumber berkurang | tidak |
+| `savings withdraw` (menarik) | bertambah | berkurang | budget tujuan bertambah | tidak |
+| `savings spend --mode purpose` | tetap | berkurang | tetap | terpisah, sebagai "pengeluaran dari tabungan" |
+| `savings spend --mode debt` | tetap | berkurang | tetap | belum (dicatat sebagai hutang ke tabungan) |
+| `debt pay` pinjaman tabungan | berkurang | bertambah | budget kategori berkurang | ya, di kategori barangnya |
+| `adjust --account <tabungan>` | tetap | disesuaikan | tetap | tidak |
+
+`balance` menampilkan total dompet dan total tabungan secara terpisah; kekayaan bersih = dompet + tabungan +
+piutang − hutang (pinjaman dari tabungan sendiri tidak dihitung sebagai hutang).
 
 ### `savings add`
 
+Membuat tabungan, atau mengaktifkan kembali tabungan yang pernah dihapus (nama sama). Nama tabungan dan dompet
+berbagi satu daftar nama.
+
 | Opsi | Wajib | Keterangan |
 |---|---|---|
-| `<name>` | ya | Nama tabungan (tidak boleh sama dengan kategori pengeluaran). |
+| `<name>` | ya | Nama tabungan. |
 | `--target <nominal>` | | Target nominal. |
 | `--target-date <YYYY-MM-DD>` | | Tenggat. |
+| `--opening <nominal>` | | Saldo awal tabungan yang sudah ada (boleh 0). Tidak mengubah dompet maupun budget. |
 
 ```bat
 python finance.py savings add "dana darurat" --target 5jt --target-date 2027-06-30
@@ -1568,48 +1607,267 @@ python finance.py savings add "dana darurat" --target 5jt --target-date 2027-06-
 ```json
 {
   "ok": true,
-  "message": "Tabungan dana darurat dibuat (target Rp5.000.000 pada 30 Juni 2027). Isi dengan: budget alloc --item \"dana darurat|100k\"",
+  "message": "Tabungan dana darurat dibuat (target Rp5.000.000 pada 30 Juni 2027), saldo Rp0. Isi dengan: savings deposit --from <dompet> --to \"dana darurat\" --amount 100k",
   "data": {
-    "id": 5,
-    "name": "dana darurat",
-    "target_amount": 5000000,
-    "target_date": "2027-06-30",
-    "balance": 0,
+    "savings": {
+      "id": 4,
+      "name": "dana darurat",
+      "balance": 0,
+      "target_amount": 5000000,
+      "target_date": "2027-06-30",
+      "archived": false,
+      "percent": 0.0,
+      "shortfall": 5000000,
+      "month_change": 0,
+      "loans_outstanding": 0
+    },
     "reactivated": false
   }
 }
 ```
 
+Error: `BAD_ARGS` (nama sudah dipakai dompet atau tabungan lain), `BAD_AMOUNT`, `BAD_DATE`.
+
+### `savings deposit`
+
+Menabung dari dompet operasional. Dompet dan budget sumber berkurang, tabungan bertambah. Ditolak jika sisa budget
+sumber tidak cukup.
+
+| Opsi | Wajib | Keterangan |
+|---|---|---|
+| `--from <dompet>` | ya | Dompet asal (bukan tabungan). |
+| `--to <tabungan>` | ya | Tabungan tujuan. |
+| `--amount <nominal>` | ya | Jumlah. |
+| `--from-budget <budget>` | | Budget yang dikurangi (bawaan `belum teralokasi`). |
+| `--date <tanggal>` | | Waktu menabung. |
+| `--note <teks>` | | Catatan. |
+| `--raw <teks>` | | Teks asli. |
+
 ```bat
-python finance.py budget alloc --item "dana darurat|100k"
+python finance.py savings deposit --from bri --to "dana darurat" --amount 100k
 ```
 ```json
 {
   "ok": true,
-  "message": "Dialokasikan Rp100.000 dari belum teralokasi: dana darurat Rp100.000. Sisa budget dana darurat Rp100.000, belum teralokasi Rp819.500.",
+  "message": "Menabung Rp100.000 dari bri ke tabungan dana darurat (2,0% dari target Rp5.000.000); budget belum teralokasi berkurang Rp100.000. Sisa bri Rp847.500, tabungan dana darurat Rp100.000. Sisa budget belum teralokasi Rp819.500.",
   "data": {
+    "id": 13,
     "group_id": "<acak>",
-    "total": 100000,
-    "items": [
-      {
-        "id": 5,
-        "budget": "dana darurat",
-        "amount": 100000,
-        "balance_after": 100000
-      }
-    ],
-    "unallocated_balance": 819500
+    "from": "bri",
+    "to": "dana darurat",
+    "amount": 100000,
+    "budget": "belum teralokasi",
+    "balance_from": 847500,
+    "savings": {
+      "id": 4,
+      "name": "dana darurat",
+      "balance": 100000,
+      "target_amount": 5000000,
+      "target_date": "2027-06-30",
+      "archived": false,
+      "percent": 2.0,
+      "shortfall": 4900000,
+      "month_change": 100000,
+      "loans_outstanding": 0
+    },
+    "budget_balance": 819500
   }
 }
 ```
 
-Error: `BAD_ARGS` (nama sudah dipakai), `SYSTEM_PROTECTED`, `BAD_AMOUNT`, `BAD_DATE`.
+Budget sumber tidak cukup:
+
+```bat
+python finance.py savings deposit --from tunai --to "dana darurat" --amount 60k --from-budget jajan
+```
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "BAD_AMOUNT",
+    "message": "Budget jajan tidak cukup untuk menabung Rp60.000: sisanya Rp50.000.",
+    "hint": "Kurangi jumlahnya, pakai --from-budget dengan budget lain, atau pindahkan dulu dengan budget move --to \"jajan\". Budget yang ada: belum teralokasi, makan, jajan.",
+    "data": {
+      "budget_balance": 50000
+    }
+  }
+}
+```
+
+Error: `UNKNOWN_ACCOUNT`, `UNKNOWN_BUDGET`, `BAD_AMOUNT` (termasuk budget sumber tidak cukup), `BAD_DATE`.
+
+### `savings withdraw`
+
+Menarik tabungan ke dompet operasional. Tabungan berkurang, dompet dan budget tujuan bertambah. Ditolak jika saldo
+tabungan tidak cukup.
+
+| Opsi | Wajib | Keterangan |
+|---|---|---|
+| `--from <tabungan>` | ya | Tabungan asal. |
+| `--to <dompet>` | ya | Dompet tujuan. |
+| `--amount <nominal>\|all` | ya | `all` = seluruh saldo tabungan. |
+| `--to-budget <budget>` | | Budget yang bertambah (bawaan `belum teralokasi`; kategori tanpa budget dibuatkan). |
+| `--date <tanggal>` | | Waktu menarik. |
+| `--note <teks>` | | Catatan. |
+| `--raw <teks>` | | Teks asli. |
+
+```bat
+python finance.py savings withdraw --from "dana darurat" --to tunai --amount 30k --to-budget makan
+```
+```json
+{
+  "ok": true,
+  "message": "Menarik Rp30.000 dari tabungan dana darurat ke tunai; budget makan bertambah Rp30.000. Sisa tabungan dana darurat Rp70.000, tunai Rp302.000. Sisa budget makan Rp280.000.",
+  "data": {
+    "id": 14,
+    "group_id": "<acak>",
+    "from": "dana darurat",
+    "to": "tunai",
+    "amount": 30000,
+    "budget": "makan",
+    "balance_to": 302000,
+    "savings": {
+      "id": 4,
+      "name": "dana darurat",
+      "balance": 70000,
+      "target_amount": 5000000,
+      "target_date": "2027-06-30",
+      "archived": false,
+      "percent": 1.4,
+      "shortfall": 4930000,
+      "month_change": 70000,
+      "loans_outstanding": 0
+    },
+    "budget_balance": 280000
+  }
+}
+```
+
+Error: `UNKNOWN_ACCOUNT`, `UNKNOWN_BUDGET`, `BAD_AMOUNT` (termasuk saldo tabungan tidak cukup), `BAD_DATE`.
+
+### `savings spend`
+
+Belanja dengan uang tabungan. Satu pemanggilan boleh berisi beberapa item; semuanya tersimpan bersama atau tidak
+sama sekali, dan ditolak jika total melebihi saldo tabungan.
+
+- `--mode purpose`: pengeluaran sesuai tujuan tabungan. Saldo tabungan turun; dompet dan budget tidak berubah.
+  Tercatat sebagai pengeluaran dengan sumber tabungan, dilaporkan terpisah dari pengeluaran dompet.
+- `--mode debt`: meminjam dari tabungan. Saldo tabungan turun; dompet dan budget belum berubah. Tercatat sebagai
+  hutang ke tabungan (satu hutang per item, `person` = nama tabungan). Saat dikembalikan dengan `debt pay`, dompet dan
+  budget kategori barangnya berkurang, tabungan bertambah lagi, dan pengeluarannya baru tercatat di kategori itu.
+
+| Opsi | Wajib | Keterangan |
+|---|---|---|
+| `--from <tabungan>` | ya | Tabungan. |
+| `--item "catatan\|jumlah\|kategori"` | ya, boleh diulang | Kategori opsional (ditebak). |
+| `--mode purpose\|debt` | ya | Lihat di atas. |
+| `--date <tanggal>` | | Waktu belanja. |
+| `--raw <teks>` | | Teks asli. |
+
+```bat
+python finance.py savings spend --from "dana darurat" --item "kacamata|40k|kesehatan" --mode purpose
+```
+```json
+{
+  "ok": true,
+  "message": "Belanja dari tabungan dana darurat Rp40.000: kacamata Rp40.000 [kesehatan]. Dicatat sebagai pengeluaran dari tabungan; dompet dan budget tidak berubah. Sisa tabungan dana darurat Rp30.000.",
+  "data": {
+    "group_id": "<acak>",
+    "mode": "purpose",
+    "savings": {
+      "id": 4,
+      "name": "dana darurat",
+      "balance": 30000,
+      "target_amount": 5000000,
+      "target_date": "2027-06-30",
+      "archived": false,
+      "percent": 0.6,
+      "shortfall": 4970000,
+      "month_change": 30000,
+      "loans_outstanding": 0
+    },
+    "total": 40000,
+    "items": [
+      {
+        "id": 15,
+        "note": "kacamata",
+        "amount": 40000,
+        "category": "kesehatan",
+        "category_source": "given",
+        "debt_id": null
+      }
+    ]
+  }
+}
+```
+
+```bat
+python finance.py savings spend --from "dana darurat" --item "servis motor|20k|transport" --mode debt
+```
+```json
+{
+  "ok": true,
+  "message": "Pinjam Rp20.000 dari tabungan dana darurat untuk: servis motor Rp20.000 [transport]. Dicatat sebagai hutang ke tabungan (#1); dompet dan budget belum berubah. Kembalikan dengan: debt pay --person \"dana darurat\" --amount <jumlah> (pengeluarannya tercatat saat dikembalikan). Sisa tabungan dana darurat Rp10.000.",
+  "data": {
+    "group_id": "<acak>",
+    "mode": "debt",
+    "savings": {
+      "id": 4,
+      "name": "dana darurat",
+      "balance": 10000,
+      "target_amount": 5000000,
+      "target_date": "2027-06-30",
+      "archived": false,
+      "percent": 0.2,
+      "shortfall": 4990000,
+      "month_change": 10000,
+      "loans_outstanding": 20000
+    },
+    "total": 20000,
+    "items": [
+      {
+        "id": 16,
+        "note": "servis motor",
+        "amount": 20000,
+        "category": "transport",
+        "category_source": "given",
+        "debt_id": 1
+      }
+    ]
+  }
+}
+```
+
+Saldo tabungan tidak cukup:
+
+```bat
+python finance.py savings spend --from "dana darurat" --item "hp baru|1jt" --mode purpose
+```
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "BAD_AMOUNT",
+    "message": "Saldo tabungan dana darurat tidak cukup untuk membayar Rp1.000.000: sisanya Rp10.000.",
+    "hint": "Kurangi jumlahnya, paling banyak Rp10.000, atau isi dulu lewat savings deposit --to \"dana darurat\".",
+    "data": {
+      "savings_balance": 10000
+    }
+  }
+}
+```
+
+Error: `UNKNOWN_ACCOUNT`, `UNKNOWN_CATEGORY`, `BAD_AMOUNT` (termasuk saldo tabungan tidak cukup), `BAD_DATE`,
+`BAD_ARGS` (format item).
 
 ### `savings list`
 
-Saldo, target, persen tercapai, kekurangan, dan perubahan bersih bulan ini untuk tiap tabungan, lalu total.
+Saldo, target, persen tercapai, kekurangan, perubahan bersih bulan ini, dan pinjaman yang belum dikembalikan untuk
+tiap tabungan, lalu total.
 
-Tanpa opsi.
+| Opsi | Wajib | Keterangan |
+|---|---|---|
+| `--all` | | Sertakan tabungan yang sudah dihapus. |
 
 ```bat
 python finance.py savings list
@@ -1617,30 +1875,32 @@ python finance.py savings list
 ```json
 {
   "ok": true,
-  "message": "Tabungan:\n- dana darurat: Rp100.000 dari target Rp5.000.000 (2,0%), kurang Rp4.900.000, tenggat 30 Juni 2027. Bulan ini +Rp100.000.\nTotal tabungan: Rp100.000 (bulan ini +Rp100.000).",
+  "message": "Tabungan (terpisah dari dompet dan budget):\n- dana darurat: Rp10.000 dari target Rp5.000.000 (0,2%), kurang Rp4.990.000, tenggat 30 Juni 2027. Bulan ini +Rp10.000. Pinjaman belum dikembalikan Rp20.000.\nTotal tabungan: Rp10.000 (bulan ini +Rp10.000).",
   "data": {
     "savings": [
       {
-        "id": 5,
+        "id": 4,
         "name": "dana darurat",
-        "balance": 100000,
+        "balance": 10000,
         "target_amount": 5000000,
         "target_date": "2027-06-30",
         "archived": false,
-        "percent": 2.0,
-        "shortfall": 4900000,
-        "month_change": 100000
+        "percent": 0.2,
+        "shortfall": 4990000,
+        "month_change": 10000,
+        "loans_outstanding": 20000
       }
     ],
-    "total": 100000,
-    "month_change_total": 100000
+    "total": 10000,
+    "month_change_total": 10000,
+    "loans_outstanding_total": 20000
   }
 }
 ```
 
 Error: tidak ada yang khusus.
 
-### `savings set-target`
+### `savings set`
 
 | Opsi | Wajib | Keterangan |
 |---|---|---|
@@ -1650,14 +1910,14 @@ Error: tidak ada yang khusus.
 | `--clear` | | Hapus target dan tenggat (tidak boleh digabung dengan dua opsi di atas). |
 
 ```bat
-python finance.py savings set-target "dana darurat" --target 3jt
+python finance.py savings set "dana darurat" --target 3jt
 ```
 ```json
 {
   "ok": true,
   "message": "Tabungan dana darurat sekarang target Rp3.000.000 pada 30 Juni 2027.",
   "data": {
-    "id": 5,
+    "id": 4,
     "name": "dana darurat",
     "target_amount": 3000000,
     "target_date": "2027-06-30"
@@ -1665,9 +1925,11 @@ python finance.py savings set-target "dana darurat" --target 3jt
 }
 ```
 
-Error: `UNKNOWN_BUDGET`, `BAD_AMOUNT`, `BAD_DATE`, `BAD_ARGS` (tidak ada yang diubah).
+Error: `UNKNOWN_ACCOUNT`, `BAD_AMOUNT`, `BAD_DATE`, `BAD_ARGS` (tidak ada yang diubah).
 
 ### `savings rename`
+
+Nama di pinjaman tabungannya ikut berganti.
 
 | Opsi | Wajib | Keterangan |
 |---|---|---|
@@ -1682,22 +1944,25 @@ python finance.py savings rename "dana darurat" darurat
   "ok": true,
   "message": "Tabungan dana darurat diganti nama menjadi darurat.",
   "data": {
-    "id": 5,
+    "id": 4,
     "old_name": "dana darurat",
     "name": "darurat"
   }
 }
 ```
 
-Error: `UNKNOWN_BUDGET`, `BAD_ARGS`, `SYSTEM_PROTECTED`.
+Error: `UNKNOWN_ACCOUNT`, `BAD_ARGS` (nama sudah dipakai).
 
 ### `savings remove`
 
-Sisa tabungan kembali ke `belum teralokasi`. Belum pernah diisi: dihapus sungguhan; sudah: diarsipkan.
+Belum pernah dipakai: dihapus sungguhan; sudah: diarsipkan. Ditolak (`NOT_EMPTY`) jika masih ada pinjaman yang belum
+dikembalikan, atau jika saldo tidak nol tanpa salah satu opsi.
 
 | Opsi | Wajib | Keterangan |
 |---|---|---|
 | `<name>` | ya | Nama tabungan. |
+| `--move-to <dompet\|tabungan>` | | Sisa dipindah ke dompet (masuk ke `belum teralokasi`) atau ke tabungan lain. |
+| `--write-off` | | Sisa dinolkan lewat penyesuaian (dompet dan budget tidak berubah). |
 
 ```bat
 python finance.py savings add liburan
@@ -1705,13 +1970,20 @@ python finance.py savings add liburan
 ```json
 {
   "ok": true,
-  "message": "Tabungan liburan dibuat (tanpa target). Isi dengan: budget alloc --item \"liburan|100k\"",
+  "message": "Tabungan liburan dibuat (tanpa target), saldo Rp0. Isi dengan: savings deposit --from <dompet> --to \"liburan\" --amount 100k",
   "data": {
-    "id": 6,
-    "name": "liburan",
-    "target_amount": null,
-    "target_date": null,
-    "balance": 0,
+    "savings": {
+      "id": 5,
+      "name": "liburan",
+      "balance": 0,
+      "target_amount": null,
+      "target_date": null,
+      "archived": false,
+      "percent": null,
+      "shortfall": null,
+      "month_change": 0,
+      "loans_outstanding": 0
+    },
     "reactivated": false
   }
 }
@@ -1723,17 +1995,38 @@ python finance.py savings remove liburan
 ```json
 {
   "ok": true,
-  "message": "Tabungan liburan dihapus permanen karena belum pernah diisi. Sisa budget belum teralokasi Rp819.500.",
+  "message": "Tabungan liburan dihapus permanen karena belum pernah dipakai.",
   "data": {
-    "id": 6,
+    "id": 5,
     "name": "liburan",
     "mode": "deleted",
-    "returned": 0
+    "balance_before": 0,
+    "moved_to": null,
+    "written_off": false
   }
 }
 ```
 
-Error: `UNKNOWN_BUDGET`.
+Masih ada pinjaman:
+
+```bat
+python finance.py savings remove darurat --write-off
+```
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "NOT_EMPTY",
+    "message": "Masih ada pinjaman dari tabungan darurat sebesar Rp20.000 yang belum dikembalikan.",
+    "hint": "Kembalikan dulu: debt pay --person \"darurat\" --amount all, atau hapus pinjamannya: debt remove --person \"darurat\" --write-off",
+    "data": {
+      "loans_outstanding": 20000
+    }
+  }
+}
+```
+
+Error: `UNKNOWN_ACCOUNT`, `NOT_EMPTY`, `BAD_ARGS` (tujuan sama dengan asal).
 
 ---
 
@@ -1770,10 +2063,10 @@ python finance.py debt add --direction i_owe --person Budi --amount 50k --due 20
 ```json
 {
   "ok": true,
-  "message": "Tercatat hutang ke Budi Rp50.000 (#1), jatuh tempo 20 Oktober 2026 (14 hari lagi). Uangnya masuk ke tunai (dompet default) dan ke budget belum teralokasi. Sisa tunai Rp322.000. Sisa budget belum teralokasi Rp869.500. Total hutang ke Budi sekarang Rp50.000.",
+  "message": "Tercatat hutang ke Budi Rp50.000 (#2), jatuh tempo 20 Oktober 2026 (14 hari lagi). Uangnya masuk ke tunai (dompet default) dan ke budget belum teralokasi. Sisa tunai Rp352.000. Sisa budget belum teralokasi Rp869.500. Total hutang ke Budi sekarang Rp50.000.",
   "data": {
     "debt": {
-      "id": 1,
+      "id": 2,
       "direction": "i_owe",
       "person": "Budi",
       "principal": 50000,
@@ -1785,9 +2078,10 @@ python finance.py debt add --direction i_owe --person Budi --amount 50k --due 20
       "note": null,
       "cash": true,
       "archived": false,
+      "savings": null,
       "created_at": "2026-10-06 12:00:00"
     },
-    "transaction_id": 13,
+    "transaction_id": 17,
     "group_id": "<acak>",
     "expense_id": null,
     "expense_category": null,
@@ -1795,7 +2089,7 @@ python finance.py debt add --direction i_owe --person Budi --amount 50k --due 20
     "account": "tunai",
     "used_default_account": true,
     "budget": "belum teralokasi",
-    "balance_after": 322000
+    "balance_after": 352000
   }
 }
 ```
@@ -1808,10 +2102,10 @@ python finance.py debt add --direction owed_to_me --person Andi --amount 100k --
 ```json
 {
   "ok": true,
-  "message": "Tercatat piutang: Andi pinjam Rp100.000 ke kamu (#2). Uangnya keluar dari bri, diambil dari budget belum teralokasi. Sisa bri Rp847.500. Sisa budget belum teralokasi Rp769.500. Total piutang dari Andi sekarang Rp100.000.",
+  "message": "Tercatat piutang: Andi pinjam Rp100.000 ke kamu (#3). Uangnya keluar dari bri, diambil dari budget belum teralokasi. Sisa bri Rp747.500. Sisa budget belum teralokasi Rp769.500. Total piutang dari Andi sekarang Rp100.000.",
   "data": {
     "debt": {
-      "id": 2,
+      "id": 3,
       "direction": "owed_to_me",
       "person": "Andi",
       "principal": 100000,
@@ -1823,9 +2117,10 @@ python finance.py debt add --direction owed_to_me --person Andi --amount 100k --
       "note": null,
       "cash": true,
       "archived": false,
+      "savings": null,
       "created_at": "2026-10-06 12:00:00"
     },
-    "transaction_id": 14,
+    "transaction_id": 18,
     "group_id": "<acak>",
     "expense_id": null,
     "expense_category": null,
@@ -1833,7 +2128,7 @@ python finance.py debt add --direction owed_to_me --person Andi --amount 100k --
     "account": "bri",
     "used_default_account": false,
     "budget": "belum teralokasi",
-    "balance_after": 847500
+    "balance_after": 747500
   }
 }
 ```
@@ -1846,10 +2141,10 @@ python finance.py debt add --direction i_owe --person Citra --amount 25k --paid-
 ```json
 {
   "ok": true,
-  "message": "Tercatat hutang ke Citra Rp25.000 (#3). Citra membayari makan siang, dicatat sebagai pengeluaran Rp25.000 (kategori makan). Saldo tunai tidak berubah; budget belum teralokasi bertambah Rp25.000 dari hutang, budget makan berkurang Rp25.000. Sisa tunai Rp322.000. Sisa budget belum teralokasi Rp794.500, makan Rp225.000. Total hutang ke Citra sekarang Rp25.000.",
+  "message": "Tercatat hutang ke Citra Rp25.000 (#4). Citra membayari makan siang, dicatat sebagai pengeluaran Rp25.000 (kategori makan). Saldo tunai tidak berubah; budget belum teralokasi bertambah Rp25.000 dari hutang, budget makan berkurang Rp25.000. Sisa tunai Rp352.000. Sisa budget belum teralokasi Rp794.500, makan Rp255.000. Total hutang ke Citra sekarang Rp25.000.",
   "data": {
     "debt": {
-      "id": 3,
+      "id": 4,
       "direction": "i_owe",
       "person": "Citra",
       "principal": 25000,
@@ -1861,17 +2156,18 @@ python finance.py debt add --direction i_owe --person Citra --amount 25k --paid-
       "note": "makan siang",
       "cash": true,
       "archived": false,
+      "savings": null,
       "created_at": "2026-10-06 12:00:00"
     },
-    "transaction_id": 15,
+    "transaction_id": 19,
     "group_id": "<acak>",
-    "expense_id": 16,
+    "expense_id": 20,
     "expense_category": "makan",
     "expense_budget": "makan",
     "account": "tunai",
     "used_default_account": true,
     "budget": "belum teralokasi",
-    "balance_after": 322000
+    "balance_after": 352000
   }
 }
 ```
@@ -1884,10 +2180,10 @@ python finance.py debt add --direction i_owe --person Budi --amount 30k --no-cas
 ```json
 {
   "ok": true,
-  "message": "Tercatat hutang ke Budi Rp30.000 (#4). Tanpa aliran uang: dompet dan budget tidak berubah. Total hutang ke Budi sekarang Rp80.000 dari 2 catatan.",
+  "message": "Tercatat hutang ke Budi Rp30.000 (#5). Tanpa aliran uang: dompet dan budget tidak berubah. Total hutang ke Budi sekarang Rp80.000 dari 2 catatan.",
   "data": {
     "debt": {
-      "id": 4,
+      "id": 5,
       "direction": "i_owe",
       "person": "Budi",
       "principal": 30000,
@@ -1899,6 +2195,7 @@ python finance.py debt add --direction i_owe --person Budi --amount 30k --no-cas
       "note": "utang bulan lalu",
       "cash": false,
       "archived": false,
+      "savings": null,
       "created_at": "2026-10-06 12:00:00"
     },
     "transaction_id": null,
@@ -1944,12 +2241,12 @@ python finance.py debt pay --person Budi --amount 20k
   "ok": false,
   "error": {
     "code": "AMBIGUOUS_DEBT",
-    "message": "Budi punya 2 catatan hutang/piutang: #1 hutang ke Budi sisa Rp50.000; #4 hutang ke Budi sisa Rp30.000 (utang bulan lalu).",
-    "hint": "Sebutkan yang dimaksud dengan --id, contoh --id 1.",
+    "message": "Budi punya 2 catatan hutang/piutang: #2 hutang ke Budi sisa Rp50.000; #5 hutang ke Budi sisa Rp30.000 (utang bulan lalu).",
+    "hint": "Sebutkan yang dimaksud dengan --id, contoh --id 2.",
     "data": {
       "candidates": [
         {
-          "id": 1,
+          "id": 2,
           "direction": "i_owe",
           "remaining": 50000,
           "principal": 50000,
@@ -1957,7 +2254,7 @@ python finance.py debt pay --person Budi --amount 20k
           "note": null
         },
         {
-          "id": 4,
+          "id": 5,
           "direction": "i_owe",
           "remaining": 30000,
           "principal": 30000,
@@ -1971,15 +2268,15 @@ python finance.py debt pay --person Budi --amount 20k
 ```
 
 ```bat
-python finance.py debt pay --id 1 --amount 20k
+python finance.py debt pay --id 2 --amount 20k
 ```
 ```json
 {
   "ok": true,
-  "message": "Bayar hutang ke Budi Rp20.000 dari tunai (dompet default). Sisa hutang ke Budi (#1) Rp30.000. Sisa tunai Rp302.000. Sisa budget belum teralokasi Rp774.500.",
+  "message": "Bayar hutang ke Budi Rp20.000 dari tunai (dompet default). Sisa hutang ke Budi (#2) Rp30.000. Sisa tunai Rp332.000. Sisa budget belum teralokasi Rp774.500.",
   "data": {
     "debt": {
-      "id": 1,
+      "id": 2,
       "direction": "i_owe",
       "person": "Budi",
       "principal": 50000,
@@ -1991,9 +2288,10 @@ python finance.py debt pay --id 1 --amount 20k
       "note": null,
       "cash": true,
       "archived": false,
+      "savings": null,
       "created_at": "2026-10-06 12:00:00"
     },
-    "transaction_id": 17,
+    "transaction_id": 21,
     "group_id": "<acak>",
     "amount": 20000,
     "remaining": 30000,
@@ -2001,7 +2299,7 @@ python finance.py debt pay --id 1 --amount 20k
     "account": "tunai",
     "used_default_account": true,
     "budget": "belum teralokasi",
-    "balance_after": 302000
+    "balance_after": 332000
   }
 }
 ```
@@ -2009,14 +2307,14 @@ python finance.py debt pay --id 1 --amount 20k
 Bayar melebihi sisa:
 
 ```bat
-python finance.py debt pay --id 1 --amount 50k
+python finance.py debt pay --id 2 --amount 50k
 ```
 ```json
 {
   "ok": false,
   "error": {
     "code": "OVERPAYMENT",
-    "message": "Pembayaran Rp50.000 melebihi sisa hutang ke Budi (#1) yaitu Rp30.000.",
+    "message": "Pembayaran Rp50.000 melebihi sisa hutang ke Budi (#2) yaitu Rp30.000.",
     "hint": "Bayar paling banyak Rp30.000, atau pakai --amount all untuk melunasi.",
     "data": {
       "remaining": 30000
@@ -2033,10 +2331,10 @@ python finance.py debt pay --person Andi --amount 40k --account bri
 ```json
 {
   "ok": true,
-  "message": "Andi membayar piutang Rp40.000, masuk ke bri. Sisa piutang dari Andi (#2) Rp60.000. Sisa bri Rp887.500. Sisa budget belum teralokasi Rp814.500.",
+  "message": "Andi membayar piutang Rp40.000, masuk ke bri. Sisa piutang dari Andi (#3) Rp60.000. Sisa bri Rp787.500. Sisa budget belum teralokasi Rp814.500.",
   "data": {
     "debt": {
-      "id": 2,
+      "id": 3,
       "direction": "owed_to_me",
       "person": "Andi",
       "principal": 100000,
@@ -2048,9 +2346,10 @@ python finance.py debt pay --person Andi --amount 40k --account bri
       "note": null,
       "cash": true,
       "archived": false,
+      "savings": null,
       "created_at": "2026-10-06 12:00:00"
     },
-    "transaction_id": 18,
+    "transaction_id": 22,
     "group_id": "<acak>",
     "amount": 40000,
     "remaining": 60000,
@@ -2058,7 +2357,52 @@ python finance.py debt pay --person Andi --amount 40k --account bri
     "account": "bri",
     "used_default_account": false,
     "budget": "belum teralokasi",
-    "balance_after": 887500
+    "balance_after": 787500
+  }
+}
+```
+
+Mengembalikan pinjaman dari tabungan (dari `savings spend --mode debt`). `--person` adalah nama tabungannya. Dompet
+dan budget berkurang, tabungan bertambah, dan pengeluarannya tercatat di kategori barang yang dulu dibeli; budget
+bawaannya budget kategori itu, bisa diganti dengan `--budget`:
+
+```bat
+python finance.py debt pay --person darurat --amount all
+```
+```json
+{
+  "ok": true,
+  "message": "Kembalikan Rp20.000 ke tabungan darurat dari tunai (dompet default), dicatat sebagai pengeluaran servis motor (kategori transport, budget belum teralokasi). Pinjaman dari tabungan darurat (#1) LUNAS. Sisa tunai Rp312.000, tabungan darurat Rp30.000. Sisa budget belum teralokasi Rp794.500.",
+  "data": {
+    "debt": {
+      "id": 1,
+      "direction": "i_owe",
+      "person": "darurat",
+      "principal": 20000,
+      "paid": 20000,
+      "remaining": 0,
+      "status": "paid",
+      "due_date": null,
+      "days_until_due": null,
+      "note": "servis motor",
+      "cash": true,
+      "archived": false,
+      "savings": "darurat",
+      "created_at": "2026-10-06 12:00:00"
+    },
+    "transaction_id": 24,
+    "expense_id": 23,
+    "group_id": "<acak>",
+    "amount": 20000,
+    "remaining": 0,
+    "paid_off": true,
+    "account": "tunai",
+    "used_default_account": true,
+    "budget": "belum teralokasi",
+    "category": "transport",
+    "savings": "darurat",
+    "balance_after": 312000,
+    "savings_balance_after": 30000
   }
 }
 ```
@@ -2081,11 +2425,11 @@ python finance.py debt list
 ```json
 {
   "ok": true,
-  "message": "Hutang saya:\n- #1 hutang ke Budi: sisa Rp30.000 dari Rp50.000, jatuh tempo 20 Oktober 2026 (14 hari lagi)\n- #3 hutang ke Citra: sisa Rp25.000 dari Rp25.000 · makan siang\n- #4 hutang ke Budi: sisa Rp30.000 dari Rp30.000 · utang bulan lalu\nPiutang (orang berhutang ke saya):\n- #2 piutang dari Andi: sisa Rp60.000 dari Rp100.000\nTotal hutang saya: Rp85.000 | Total piutang: Rp60.000.",
+  "message": "Hutang saya:\n- #2 hutang ke Budi: sisa Rp30.000 dari Rp50.000, jatuh tempo 20 Oktober 2026 (14 hari lagi)\n- #4 hutang ke Citra: sisa Rp25.000 dari Rp25.000 · makan siang\n- #5 hutang ke Budi: sisa Rp30.000 dari Rp30.000 · utang bulan lalu\nPiutang (orang berhutang ke saya):\n- #3 piutang dari Andi: sisa Rp60.000 dari Rp100.000\nTotal hutang saya: Rp85.000 | Total piutang: Rp60.000.",
   "data": {
     "debts": [
       {
-        "id": 1,
+        "id": 2,
         "direction": "i_owe",
         "person": "Budi",
         "principal": 50000,
@@ -2097,10 +2441,11 @@ python finance.py debt list
         "note": null,
         "cash": true,
         "archived": false,
+        "savings": null,
         "created_at": "2026-10-06 12:00:00"
       },
       {
-        "id": 2,
+        "id": 3,
         "direction": "owed_to_me",
         "person": "Andi",
         "principal": 100000,
@@ -2112,10 +2457,11 @@ python finance.py debt list
         "note": null,
         "cash": true,
         "archived": false,
+        "savings": null,
         "created_at": "2026-10-06 12:00:00"
       },
       {
-        "id": 3,
+        "id": 4,
         "direction": "i_owe",
         "person": "Citra",
         "principal": 25000,
@@ -2127,12 +2473,14 @@ python finance.py debt list
         "note": "makan siang",
         "cash": true,
         "archived": false,
+        "savings": null,
         "created_at": "2026-10-06 12:00:00"
       }
     ],
     "count": 4,
     "debt_total": 85000,
     "receivable_total": 60000,
+    "savings_loans_total": 0,
     "due_within_7_days": []
   }
 }
@@ -2157,10 +2505,10 @@ python finance.py debt set --person Andi --due 2026-10-31
 ```json
 {
   "ok": true,
-  "message": "Piutang dari Andi (#2) diubah: jatuh tempo 31 Oktober 2026 (25 hari lagi).",
+  "message": "Piutang dari Andi (#3) diubah: jatuh tempo 31 Oktober 2026 (25 hari lagi).",
   "data": {
     "debt": {
-      "id": 2,
+      "id": 3,
       "direction": "owed_to_me",
       "person": "Andi",
       "principal": 100000,
@@ -2172,6 +2520,7 @@ python finance.py debt set --person Andi --due 2026-10-31
       "note": null,
       "cash": true,
       "archived": false,
+      "savings": null,
       "created_at": "2026-10-06 12:00:00"
     }
   }
@@ -2200,7 +2549,7 @@ python finance.py debt rename Andi "Andi Saputra"
     "old_name": "Andi",
     "name": "Andi Saputra",
     "ids": [
-      2
+      3
     ],
     "merged_ids": []
   }
@@ -2229,12 +2578,12 @@ python finance.py debt remove --person Citra
   "ok": false,
   "error": {
     "code": "NOT_EMPTY",
-    "message": "Hutang ke Citra (#3) masih bersisa Rp25.000.",
-    "hint": "Pilih salah satu: debt pay --id 3 --amount all (lunasi), atau debt remove --id 3 --write-off (sisa dianggap selesai tanpa uang). Jika salah catat, hapus transaksinya dulu: delete <id> (ID: 15).",
+    "message": "Hutang ke Citra (#4) masih bersisa Rp25.000.",
+    "hint": "Pilih salah satu: debt pay --id 4 --amount all (lunasi), atau debt remove --id 4 --write-off (sisa dianggap selesai tanpa uang). Jika salah catat, hapus transaksinya dulu: delete <id> (ID: 19).",
     "data": {
       "remaining": 25000,
       "transaction_ids": [
-        15
+        19
       ]
     }
   }
@@ -2247,9 +2596,9 @@ python finance.py debt remove --person Citra --write-off
 ```json
 {
   "ok": true,
-  "message": "Hutang ke Citra (#3) dihapus. Riwayat transaksinya tetap disimpan (diarsipkan). Sisa Rp25.000 dianggap selesai; dompet dan budget tidak berubah. Total hutang saya: Rp60.000 | Total piutang: Rp60.000.",
+  "message": "Hutang ke Citra (#4) dihapus. Riwayat transaksinya tetap disimpan (diarsipkan). Sisa Rp25.000 dianggap selesai; dompet dan budget tidak berubah. Total hutang saya: Rp60.000 | Total piutang: Rp60.000.",
   "data": {
-    "id": 3,
+    "id": 4,
     "mode": "archived",
     "written_off": 25000,
     "debt_total": 60000,
@@ -2418,7 +2767,7 @@ python finance.py recurring pay kos
 ```json
 {
   "ok": true,
-  "message": "Tagihan kos Oktober 2026 dibayar Rp500.000 dari bri, kategori tempat tinggal. Sisa bri Rp387.500. Sisa budget belum teralokasi Rp314.500.",
+  "message": "Tagihan kos Oktober 2026 dibayar Rp500.000 dari bri, kategori tempat tinggal. Sisa bri Rp287.500. Sisa budget belum teralokasi Rp294.500.",
   "data": {
     "recurring": {
       "id": 1,
@@ -2436,7 +2785,7 @@ python finance.py recurring pay kos
         "days_until_due": -1
       }
     },
-    "transaction_id": 19,
+    "transaction_id": 25,
     "group_id": "<acak>",
     "month": "2026-10",
     "amount": 500000,
@@ -2444,8 +2793,8 @@ python finance.py recurring pay kos
     "used_default_account": false,
     "category": "tempat tinggal",
     "budget": "belum teralokasi",
-    "balance_after": 387500,
-    "budget_balance": 314500
+    "balance_after": 287500,
+    "budget_balance": 294500
   }
 }
 ```
@@ -2581,7 +2930,7 @@ python finance.py analyze --period this-month
 ```json
 {
   "ok": true,
-  "message": "Analisis bulan ini (1–6 Oktober 2026):\nPemasukan Rp600.000, pengeluaran Rp605.500, selisih -Rp5.500, rasio menabung -0,9%.\nPengeluaran dibanding 1–6 September 2026: periode sebelumnya belum ada.\nKategori terbesar: tempat tinggal Rp500.000 (82,6%), makan Rp93.000 (15,4%), jajan Rp10.000 (1,7%).\nRata-rata Rp100.917 per hari; paling boros 6 Oktober 2026 (Rp555.500); 4 dari 6 hari tanpa pengeluaran.\nProyeksi pengeluaran sampai akhir bulan: Rp3.128.417 (rata-rata harian x 31 hari).\nTidak ada budget yang minus.\nHutang Rp60.000, piutang Rp60.000.",
+  "message": "Analisis bulan ini (1–6 Oktober 2026):\nPemasukan Rp600.000, pengeluaran Rp625.500, selisih -Rp25.500, rasio menabung -4,2%.\nPengeluaran dibanding 1–6 September 2026: periode sebelumnya belum ada.\nKategori terbesar: tempat tinggal Rp500.000 (79,9%), makan Rp93.000 (14,9%), transport Rp20.000 (3,2%).\nRata-rata Rp104.250 per hari; paling boros 6 Oktober 2026 (Rp575.500); 4 dari 6 hari tanpa pengeluaran.\nProyeksi pengeluaran sampai akhir bulan: Rp3.231.750 (rata-rata harian x 31 hari).\nTidak ada budget yang minus.\nTabungan Rp30.000; pengeluaran dari tabungan (di luar angka di atas) Rp40.000.\nHutang Rp60.000, piutang Rp60.000.",
   "data": {
     "period": {
       "key": "this-month",
@@ -2591,27 +2940,27 @@ python finance.py analyze --period this-month
       "text": "1–6 Oktober 2026"
     },
     "income_total": 600000,
-    "expense_total": 605500,
-    "net": -5500,
-    "savings_rate": -0.9,
-    "expense_count": 6,
+    "expense_total": 625500,
+    "net": -25500,
+    "savings_rate": -4.2,
+    "expense_count": 7,
     "expense_by_category": [
       {
         "category": "tempat tinggal",
         "amount": 500000,
-        "percent": 82.6,
+        "percent": 79.9,
         "count": 1
       },
       {
         "category": "makan",
         "amount": 93000,
-        "percent": 15.4,
+        "percent": 14.9,
         "count": 3
       },
       {
-        "category": "jajan",
-        "amount": 10000,
-        "percent": 1.7,
+        "category": "transport",
+        "amount": 20000,
+        "percent": 3.2,
         "count": 1
       }
     ],
@@ -2624,9 +2973,9 @@ python finance.py analyze --period this-month
         "text": "1–6 September 2026"
       },
       "expense": {
-        "current": 605500,
+        "current": 625500,
         "previous": 0,
-        "difference": 605500,
+        "difference": 625500,
         "percent": null
       },
       "income": {
@@ -2651,28 +3000,28 @@ python finance.py analyze --period this-month
           "percent": null
         },
         {
-          "category": "jajan",
-          "current": 10000,
+          "category": "transport",
+          "current": 20000,
           "previous": 0,
-          "difference": 10000,
+          "difference": 20000,
           "percent": null
         }
       ]
     },
     "daily": {
       "days": 6,
-      "average_per_day": 100917,
+      "average_per_day": 104250,
       "busiest_day": {
         "date": "2026-10-06",
-        "amount": 555500,
-        "count": 5
+        "amount": 575500,
+        "count": 6
       },
       "days_with_spending": 2,
       "days_without_spending": 4
     },
     "top_expenses": [
       {
-        "id": 19,
+        "id": 25,
         "ts": "2026-10-06 12:00:00",
         "amount": 500000,
         "note": "kos Oktober 2026",
@@ -2688,7 +3037,7 @@ python finance.py analyze --period this-month
         "account": "tunai"
       },
       {
-        "id": 16,
+        "id": 20,
         "ts": "2026-10-06 12:00:00",
         "amount": 25000,
         "note": "makan siang (dibayari Citra)",
@@ -2702,9 +3051,9 @@ python finance.py analyze --period this-month
         {
           "name": "belum teralokasi",
           "kind": "unallocated",
-          "balance": 314500,
+          "balance": 294500,
           "archived": false,
-          "spent_in_period": 580500
+          "spent_in_period": 600500
         },
         {
           "name": "jajan",
@@ -2716,7 +3065,7 @@ python finance.py analyze --period this-month
         {
           "name": "makan",
           "kind": "category",
-          "balance": 225000,
+          "balance": 255000,
           "archived": false,
           "spent_in_period": 25000
         }
@@ -2726,8 +3075,31 @@ python finance.py analyze --period this-month
     "projection": {
       "days_elapsed": 6,
       "days_in_month": 31,
-      "average_per_day": 100917,
-      "projected_expense": 3128417
+      "average_per_day": 104250,
+      "projected_expense": 3231750
+    },
+    "savings": {
+      "accounts": [
+        {
+          "name": "darurat",
+          "balance": 30000,
+          "target_amount": 3000000
+        }
+      ],
+      "total": 30000,
+      "expense": {
+        "total": 40000,
+        "count": 1,
+        "by_category": [
+          {
+            "category": "kesehatan",
+            "amount": 40000,
+            "percent": 100.0,
+            "count": 1
+          }
+        ]
+      },
+      "loans_outstanding": 0
     },
     "debts": {
       "debt_total": 60000,
@@ -2770,14 +3142,14 @@ python finance.py daily-check --when malam
 ```json
 {
   "ok": true,
-  "message": "Pengeluaran hari ini Rp555.500 dari 5 transaksi.",
+  "message": "Pengeluaran hari ini Rp615.500 dari 7 transaksi.",
   "data": {
     "send": true,
     "when": "malam",
     "date": "2026-10-06",
-    "transactions": 16,
-    "expense_total": 555500,
-    "expense_count": 5
+    "transactions": 22,
+    "expense_total": 615500,
+    "expense_count": 7
   }
 }
 ```
@@ -2802,7 +3174,7 @@ python finance.py export --period this-month
 ```json
 {
   "ok": true,
-  "message": "Ekspor bulan ini (1–6 Oktober 2026) tersimpan di <FINANCE_HOME>\\exports\\keuangan-this-month-20261006-120000.xlsx. Isi: 17 transaksi, ringkasan per kategori, saldo 2 dompet, 4 budget, 3 hutang piutang.",
+  "message": "Ekspor bulan ini (1–6 Oktober 2026) tersimpan di <FINANCE_HOME>\\exports\\keuangan-this-month-20261006-120000.xlsx. Isi: 23 transaksi, ringkasan per kategori, saldo 3 dompet, 3 budget, 4 hutang piutang.",
   "data": {
     "path": "<FINANCE_HOME>\\exports\\keuangan-this-month-20261006-120000.xlsx",
     "period": {
@@ -2813,11 +3185,11 @@ python finance.py export --period this-month
       "text": "1–6 Oktober 2026"
     },
     "counts": {
-      "transactions": 17,
-      "categories": 7,
-      "accounts": 2,
-      "budgets": 4,
-      "debts": 3
+      "transactions": 23,
+      "categories": 10,
+      "accounts": 3,
+      "budgets": 3,
+      "debts": 4
     }
   }
 }
@@ -2830,9 +3202,10 @@ Error: `BAD_PERIOD`, `BAD_ARGS` (`--out` bukan `.xlsx`, file sedang dibuka di Ex
 ### `context`
 
 Semua nama yang sah dan saldo saat ini, dalam satu panggilan: tanggal dan hari, dompet (nama, tipe, saldo, default),
-kategori pengeluaran dan pemasukan, budget (nama, jenis, saldo), tabungan (saldo, target), alias dompet/kategori,
-kata kunci tebak kategori (`data.keywords`), hutang/piutang terbuka, dan tagihan rutin. Dipakai pemanggil sebelum
-menyusun perintah, supaya memakai nama yang benar.
+kategori pengeluaran dan pemasukan, budget (nama, jenis, saldo), tabungan (`data.savings`: saldo, target, pinjaman
+yang belum dikembalikan; terpisah dari `data.accounts`), alias dompet/kategori, kata kunci tebak kategori
+(`data.keywords`), hutang/piutang terbuka (termasuk pinjaman dari tabungan, `savings_loan: true`), dan tagihan rutin.
+Dipakai pemanggil sebelum menyusun perintah, supaya memakai nama yang benar.
 
 Tanpa opsi.
 
@@ -2842,7 +3215,7 @@ python finance.py context
 ```json
 {
   "ok": true,
-  "message": "Hari ini Selasa, 6 Oktober 2026.\nDompet: tunai (tunai, default) Rp302.000, bri (bank) Rp387.500.\nKategori pengeluaran: makan, jajan, transport, belanja, tempat tinggal, pulsa & internet, pendidikan, kesehatan, tagihan, biaya admin, sedekah, lainnya, kucing oren.\nKategori pemasukan: gaji, uang saku, freelance, bonus, lainnya.\nBudget: belum teralokasi Rp314.500, makan Rp225.000, jajan Rp50.000.\nTabungan: darurat Rp100.000.\nAlias: cash = tunai.\nKata kunci tebak kategori: 78 (lihat data.keywords).\nHutang/piutang terbuka: #1 hutang ke Budi Rp30.000; #2 piutang dari Andi Saputra Rp60.000; #4 hutang ke Budi Rp30.000.\nTagihan rutin: kos Rp500.000 tgl 5 (lunas bulan ini).",
+  "message": "Hari ini Selasa, 6 Oktober 2026.\nDompet: tunai (tunai, default) Rp312.000, bri (bank) Rp287.500.\nKategori pengeluaran: makan, jajan, transport, belanja, tempat tinggal, pulsa & internet, pendidikan, kesehatan, tagihan, biaya admin, sedekah, lainnya, kucing oren.\nKategori pemasukan: gaji, uang saku, freelance, bonus, lainnya.\nBudget: belum teralokasi Rp294.500, makan Rp255.000, jajan Rp50.000.\nTabungan (terpisah dari dompet dan budget): darurat Rp30.000.\nAlias: cash = tunai.\nKata kunci tebak kategori: 78 (lihat data.keywords).\nHutang/piutang terbuka: #2 hutang ke Budi Rp30.000; #3 piutang dari Andi Saputra Rp60.000; #5 hutang ke Budi Rp30.000.\nTagihan rutin: kos Rp500.000 tgl 5 (lunas bulan ini).",
   "data": {
     "today": "2026-10-06",
     "weekday": "Selasa",
@@ -2851,13 +3224,13 @@ python finance.py context
       {
         "name": "tunai",
         "type": "cash",
-        "balance": 302000,
+        "balance": 312000,
         "is_default": true
       },
       {
         "name": "bri",
         "type": "bank",
-        "balance": 387500,
+        "balance": 287500,
         "is_default": false
       }
     ],
@@ -2878,12 +3251,12 @@ python finance.py context
       {
         "name": "belum teralokasi",
         "kind": "unallocated",
-        "balance": 314500
+        "balance": 294500
       },
       {
         "name": "makan",
         "kind": "category",
-        "balance": 225000
+        "balance": 255000
       },
       {
         "name": "jajan",
@@ -2894,9 +3267,10 @@ python finance.py context
     "savings": [
       {
         "name": "darurat",
-        "balance": 100000,
+        "balance": 30000,
         "target_amount": 3000000,
-        "target_date": "2027-06-30"
+        "target_date": "2027-06-30",
+        "loans_outstanding": 0
       }
     ],
     "aliases": [
@@ -2981,25 +3355,28 @@ python finance.py context
     },
     "open_debts": [
       {
-        "id": 1,
+        "id": 2,
         "direction": "i_owe",
         "person": "Budi",
         "remaining": 30000,
-        "due_date": "2026-10-20"
+        "due_date": "2026-10-20",
+        "savings_loan": false
       },
       {
-        "id": 2,
+        "id": 3,
         "direction": "owed_to_me",
         "person": "Andi Saputra",
         "remaining": 60000,
-        "due_date": "2026-10-31"
+        "due_date": "2026-10-31",
+        "savings_loan": false
       },
       {
-        "id": 4,
+        "id": 5,
         "direction": "i_owe",
         "person": "Budi",
         "remaining": 30000,
-        "due_date": null
+        "due_date": null,
+        "savings_loan": false
       }
     ],
     "recurring": [
@@ -3034,8 +3411,8 @@ pengeluaran dari budget itu).
 **Format JSON**: daftar (array) berisi 1 sampai 200 objek `{"cmd": "<perintah>", "args": {<opsi>: <nilai>}}`.
 
 - `cmd`: salah satu dari `add`, `transfer`, `adjust`, `budget alloc`, `budget move`, `debt add`, `debt pay`,
-  `recurring pay`. Perintah lain (pengaturan, `edit`, `delete`, `undo`, laporan) ditolak karena tidak bisa di-undo
-  bersama.
+  `recurring pay`, `savings deposit`, `savings withdraw`, `savings spend`. Perintah lain (pengaturan, `edit`,
+  `delete`, `undo`, laporan) ditolak karena tidak bisa di-undo bersama.
 - `args`: nama opsi **tanpa** `--`; tanda `_` boleh dipakai untuk `-` (`paid_for` = `--paid-for`). Argumen
   positional memakai namanya di tabel opsi (`recurring pay` → `"name"`).
 - Nilai: teks, angka bulat (`15000`), `true` untuk opsi tanpa nilai (`"no_cash": true`), `false`/`null` = opsi tidak
@@ -3049,7 +3426,8 @@ pengeluaran dari budget itu).
 ```json file=contoh-batch.json
 [
   {"cmd": "add", "args": {"type": "income", "account": "bri", "item": "kiriman ortu|300k|uang saku"}},
-  {"cmd": "budget alloc", "args": {"item": ["makan|100k", "darurat|50k"]}},
+  {"cmd": "budget alloc", "args": {"item": ["makan|100k", "jajan|50k"]}},
+  {"cmd": "savings deposit", "args": {"from": "bri", "to": "darurat", "amount": "50k"}},
   {"cmd": "add", "args": {"type": "expense", "item": ["nasi padang|20k|makan", "kopi|8k"], "raw": "nasi padang 20rb sama kopi 8rb"}},
   {"cmd": "transfer", "args": {"from": "bri", "to": "tunai", "amount": "100k"}},
   {"cmd": "debt pay", "args": {"person": "Andi Saputra", "amount": "all"}}
@@ -3062,16 +3440,16 @@ python finance.py batch --file contoh-batch.json
 ```json
 {
   "ok": true,
-  "message": "5 perintah dari batch tercatat sekaligus (satu undo membatalkan semuanya):\n1. Tercatat pemasukan kiriman ortu Rp300.000 (kategori uang saku) ke bri. Sisa bri Rp687.500. Sisa budget belum teralokasi Rp614.500.\n2. Dialokasikan Rp150.000 dari belum teralokasi: makan Rp100.000, darurat Rp50.000. Sisa budget makan Rp325.000, darurat Rp150.000, belum teralokasi Rp464.500.\n3. Tercatat 2 pengeluaran (Rp28.000) dari tunai (dompet default): nasi padang Rp20.000 [makan]; kopi Rp8.000 [jajan, ditebak dari kata 'kopi']. Sisa tunai Rp274.000. Sisa budget makan Rp305.000, jajan Rp42.000.\n4. Tarik tunai Rp100.000 dari bri ke tunai. Sisa bri Rp587.500, tunai Rp374.000.\n5. Andi Saputra membayar piutang Rp60.000, masuk ke tunai (dompet default). Piutang dari Andi Saputra (#2) LUNAS. Sisa tunai Rp434.000. Sisa budget belum teralokasi Rp524.500.",
+  "message": "6 perintah dari batch tercatat sekaligus (satu undo membatalkan semuanya):\n1. Tercatat pemasukan kiriman ortu Rp300.000 (kategori uang saku) ke bri. Sisa bri Rp587.500. Sisa budget belum teralokasi Rp594.500.\n2. Dialokasikan Rp150.000 dari belum teralokasi: makan Rp100.000, jajan Rp50.000. Sisa budget makan Rp355.000, jajan Rp100.000, belum teralokasi Rp444.500.\n3. Menabung Rp50.000 dari bri ke tabungan darurat (2,7% dari target Rp3.000.000); budget belum teralokasi berkurang Rp50.000. Sisa bri Rp537.500, tabungan darurat Rp80.000. Sisa budget belum teralokasi Rp394.500.\n4. Tercatat 2 pengeluaran (Rp28.000) dari tunai (dompet default): nasi padang Rp20.000 [makan]; kopi Rp8.000 [jajan, ditebak dari kata 'kopi']. Sisa tunai Rp284.000. Sisa budget makan Rp335.000, jajan Rp92.000.\n5. Tarik tunai Rp100.000 dari bri ke tunai. Sisa bri Rp437.500, tunai Rp384.000.\n6. Andi Saputra membayar piutang Rp60.000, masuk ke tunai (dompet default). Piutang dari Andi Saputra (#3) LUNAS. Sisa tunai Rp444.000. Sisa budget belum teralokasi Rp454.500.",
   "data": {
     "group_id": "<acak>",
-    "count": 5,
+    "count": 6,
     "source": "contoh-batch.json",
     "results": [
       {
         "index": 1,
         "cmd": "add",
-        "message": "Tercatat pemasukan kiriman ortu Rp300.000 (kategori uang saku) ke bri. Sisa bri Rp687.500. Sisa budget belum teralokasi Rp614.500.",
+        "message": "Tercatat pemasukan kiriman ortu Rp300.000 (kategori uang saku) ke bri. Sisa bri Rp587.500. Sisa budget belum teralokasi Rp594.500.",
         "data": {
           "group_id": "<acak>",
           "type": "income",
@@ -3079,16 +3457,16 @@ python finance.py batch --file contoh-batch.json
           "used_default_account": false,
           "ts": "2026-10-06 12:00:00",
           "total": 300000,
-          "balance_after": 687500,
+          "balance_after": 587500,
           "items": [
             {
-              "id": 20,
+              "id": 26,
               "note": "kiriman ortu",
               "amount": 300000,
               "category": "uang saku",
               "category_source": "given",
               "budget": "belum teralokasi",
-              "budget_balance": 614500
+              "budget_balance": 594500
             }
           ]
         }
@@ -3096,59 +3474,52 @@ python finance.py batch --file contoh-batch.json
       {
         "index": 2,
         "cmd": "budget alloc",
-        "message": "Dialokasikan Rp150.000 dari belum teralokasi: makan Rp100.000, darurat Rp50.000. Sisa budget makan Rp325.000, darurat Rp150.000, belum teralokasi Rp464.500.",
+        "message": "Dialokasikan Rp150.000 dari belum teralokasi: makan Rp100.000, jajan Rp50.000. Sisa budget makan Rp355.000, jajan Rp100.000, belum teralokasi Rp444.500.",
         "data": {
           "group_id": "<acak>",
           "total": 150000,
           "items": [
             {
-              "id": 6,
+              "id": 5,
               "budget": "makan",
               "amount": 100000,
-              "balance_after": 325000
+              "balance_after": 355000
             },
             {
-              "id": 7,
-              "budget": "darurat",
+              "id": 6,
+              "budget": "jajan",
               "amount": 50000,
-              "balance_after": 150000
+              "balance_after": 100000
             }
           ],
-          "unallocated_balance": 464500
+          "unallocated_balance": 444500
         }
       },
       {
         "index": 3,
-        "cmd": "add",
-        "message": "Tercatat 2 pengeluaran (Rp28.000) dari tunai (dompet default): nasi padang Rp20.000 [makan]; kopi Rp8.000 [jajan, ditebak dari kata 'kopi']. Sisa tunai Rp274.000. Sisa budget makan Rp305.000, jajan Rp42.000.",
+        "cmd": "savings deposit",
+        "message": "Menabung Rp50.000 dari bri ke tabungan darurat (2,7% dari target Rp3.000.000); budget belum teralokasi berkurang Rp50.000. Sisa bri Rp537.500, tabungan darurat Rp80.000. Sisa budget belum teralokasi Rp394.500.",
         "data": {
+          "id": 27,
           "group_id": "<acak>",
-          "type": "expense",
-          "account": "tunai",
-          "used_default_account": true,
-          "ts": "2026-10-06 12:00:00",
-          "total": 28000,
-          "balance_after": 274000,
-          "items": [
-            {
-              "id": 21,
-              "note": "nasi padang",
-              "amount": 20000,
-              "category": "makan",
-              "category_source": "given",
-              "budget": "makan",
-              "budget_balance": 305000
-            },
-            {
-              "id": 22,
-              "note": "kopi",
-              "amount": 8000,
-              "category": "jajan",
-              "category_source": "keyword",
-              "budget": "jajan",
-              "budget_balance": 42000
-            }
-          ]
+          "from": "bri",
+          "to": "darurat",
+          "amount": 50000,
+          "budget": "belum teralokasi",
+          "balance_from": 537500,
+          "savings": {
+            "id": 4,
+            "name": "darurat",
+            "balance": 80000,
+            "target_amount": 3000000,
+            "target_date": "2027-06-30",
+            "archived": false,
+            "percent": 2.7,
+            "shortfall": 2920000,
+            "month_change": 80000,
+            "loans_outstanding": 0
+          },
+          "budget_balance": 394500
         }
       }
     ]
@@ -3156,7 +3527,7 @@ python finance.py batch --file contoh-batch.json
 }
 ```
 
-Satu `undo` membatalkan kelima perintah di atas:
+Satu `undo` membatalkan keenam perintah di atas:
 
 ```bat
 python finance.py undo
@@ -3164,24 +3535,24 @@ python finance.py undo
 ```json
 {
   "ok": true,
-  "message": "Dibatalkan 7 catatan dari pencatatan terakhir:\n- #20 06/10/2026 12:00 · pemasukan Rp300.000 · kiriman ortu [uang saku] · bri\n- #21 06/10/2026 12:00 · pengeluaran Rp20.000 · nasi padang [makan] · tunai\n- #22 06/10/2026 12:00 · pengeluaran Rp8.000 · kopi [jajan] · tunai\n- #23 06/10/2026 12:00 · transfer Rp100.000 · (tanpa catatan) · bri → tunai\n- #24 06/10/2026 12:00 · hutang/piutang masuk Rp60.000 · Andi Saputra bayar piutang · tunai\n- pindah budget Rp100.000 belum teralokasi → makan\n- pindah budget Rp50.000 belum teralokasi → darurat\nSisa bri Rp387.500, tunai Rp302.000. Sisa budget belum teralokasi Rp314.500, makan Rp225.000, jajan Rp50.000, darurat Rp100.000.",
+  "message": "Dibatalkan 8 catatan dari pencatatan terakhir:\n- #26 06/10/2026 12:00 · pemasukan Rp300.000 · kiriman ortu [uang saku] · bri\n- #27 06/10/2026 12:00 · menabung Rp50.000 · menabung ke darurat (budget belum teralokasi) · bri → darurat\n- #28 06/10/2026 12:00 · pengeluaran Rp20.000 · nasi padang [makan] · tunai\n- #29 06/10/2026 12:00 · pengeluaran Rp8.000 · kopi [jajan] · tunai\n- #30 06/10/2026 12:00 · transfer Rp100.000 · (tanpa catatan) · bri → tunai\n- #31 06/10/2026 12:00 · hutang/piutang masuk Rp60.000 · Andi Saputra bayar piutang · tunai\n- pindah budget Rp100.000 belum teralokasi → makan\n- pindah budget Rp50.000 belum teralokasi → jajan\nSisa bri Rp287.500, tabungan darurat Rp30.000, tunai Rp312.000. Sisa budget belum teralokasi Rp294.500, makan Rp255.000, jajan Rp50.000.",
   "data": {
     "group_id": "<acak>",
     "action": "batch",
     "undone": [
-      20,
-      21,
-      22
+      26,
+      27,
+      28
     ],
     "undone_moves": [
-      6,
-      7
+      5,
+      6
     ],
     "restored": [],
     "removed": [],
     "transactions": [
       {
-        "id": 20,
+        "id": 26,
         "ts": "2026-10-06 12:00:00",
         "type": "income",
         "amount": 300000,
@@ -3193,10 +3564,27 @@ python finance.py undo
         "note": "kiriman ortu",
         "raw_text": null,
         "group_id": "<acak>",
-        "deleted_at": null
+        "deleted_at": null,
+        "source": "wallet"
       },
       {
-        "id": 21,
+        "id": 27,
+        "ts": "2026-10-06 12:00:00",
+        "type": "deposit",
+        "amount": 50000,
+        "account": "bri",
+        "to_account": "darurat",
+        "category": null,
+        "budget": "belum teralokasi",
+        "debt_id": null,
+        "note": "menabung ke darurat",
+        "raw_text": null,
+        "group_id": "<acak>",
+        "deleted_at": null,
+        "source": "wallet"
+      },
+      {
+        "id": 28,
         "ts": "2026-10-06 12:00:00",
         "type": "expense",
         "amount": 20000,
@@ -3208,22 +3596,8 @@ python finance.py undo
         "note": "nasi padang",
         "raw_text": "nasi padang 20rb sama kopi 8rb",
         "group_id": "<acak>",
-        "deleted_at": null
-      },
-      {
-        "id": 22,
-        "ts": "2026-10-06 12:00:00",
-        "type": "expense",
-        "amount": 8000,
-        "account": "tunai",
-        "to_account": null,
-        "category": "jajan",
-        "budget": "jajan",
-        "debt_id": null,
-        "note": "kopi",
-        "raw_text": "nasi padang 20rb sama kopi 8rb",
-        "group_id": "<acak>",
-        "deleted_at": null
+        "deleted_at": null,
+        "source": "wallet"
       }
     ]
   }
@@ -3286,6 +3660,10 @@ Pedoman untuk pemanggil yang menerjemahkan chat bebas:
 7. Kirim `message` ke pengguna apa adanya. Jika `ok` false, sampaikan `error.message` dan gunakan `error.hint` untuk
    bertanya atau memperbaiki perintah.
 8. `AMBIGUOUS_DEBT`: tanyakan yang mana dari `error.data.candidates`, lalu ulangi dengan `--id`.
+9. Tabungan bukan budget dan bukan dompet biasa. "Nabung" = `savings deposit`; "ambil dari tabungan" =
+   `savings withdraw`; "beli X pakai tabungan" = `savings spend --mode purpose` jika memang tujuan tabungannya,
+   atau `--mode debt` jika pengguna berniat mengembalikannya (lalu `debt pay --person "<tabungan>"` saat dikembalikan).
+   Jika tidak jelas, tanyakan: "pakai tabungan untuk tujuannya, atau pinjam dulu dan nanti diganti?"
 
 | Chat | Perintah |
 |---|---|
@@ -3296,20 +3674,28 @@ Pedoman untuk pemanggil yang menerjemahkan chat bebas:
 | jajan, parkir, dan makan total 50k | `add --type expense --item "jajan, parkir, makan\|50k\|makan"` |
 | kemarin beli bensin 30rb pakai gopay | `add --type expense --account gopay --date yesterday --item "bensin\|30rb\|transport"` |
 | tanggal 3 kemarin beli buku 85k | `add --type expense --date 2026-10-03 --item "buku\|85k\|pendidikan"` |
-| beli laptop 5jt pakai tabungan laptop | `add --type expense --budget "tabungan laptop" --item "laptop\|5jt\|belanja"` |
 | alokasikan makan 300k, transport 100k | `budget alloc --item "makan\|300k" --item "transport\|100k"` |
-| sisa gaji bagi rata: makan 500k, jajan 200k, sisanya ke dana darurat 300k | `budget alloc --item "makan\|500k" --item "jajan\|200k" --item "dana darurat\|300k"` |
-| nabung 100k | `budget alloc --item "tabungan\|100k"` |
+| bagi gaji: makan 500k, jajan 200k | `budget alloc --item "makan\|500k" --item "jajan\|200k"` |
 | pindah 50k dari makan ke jajan | `budget move --from makan --to jajan --amount 50k` |
-| ambil 200k dari dana darurat buat makan | `budget move --from "dana darurat" --to makan --amount 200k` |
 | balikin semua sisa transport ke belum teralokasi | `budget move --from transport --to "belum teralokasi" --amount all` |
 | budget transport udah ga dipakai | `budget close transport` |
 | sisa budget saya | `budget list` |
 | bikin tabungan laptop target 8 juta sebelum Juni | `savings add "tabungan laptop" --target 8jt --target-date 2027-06-01` |
+| aku udah punya tabungan darurat 2 juta di rekening lain | `savings add "dana darurat" --opening 2jt` |
+| nabung 100k | `savings deposit --from bri --to tabungan --amount 100k` |
+| nabung 300k ke dana darurat dari BRI | `savings deposit --from bri --to "dana darurat" --amount 300k` |
+| sisihkan 50k dari budget jajan buat tabungan laptop | `savings deposit --from tunai --to "tabungan laptop" --amount 50k --from-budget jajan` |
+| ambil 200k dari dana darurat buat makan | `savings withdraw --from "dana darurat" --to tunai --amount 200k --to-budget makan` |
+| tarik semua tabungan liburan ke BRI | `savings withdraw --from liburan --to bri --amount all` |
+| beli laptop 5jt pakai tabungan laptop | `savings spend --from "tabungan laptop" --item "laptop\|5jt\|belanja" --mode purpose` |
+| pinjam dulu dana darurat 200k buat servis motor, nanti aku ganti | `savings spend --from "dana darurat" --item "servis motor\|200k\|transport" --mode debt` |
+| ganti 100k ke dana darurat yang kemarin kupakai servis | `debt pay --person "dana darurat" --amount 100k` |
+| saldo tabungan laptop sebenarnya 1,2 juta | `adjust --account "tabungan laptop" --actual 1,2jt` |
 | tabungan saya saat ini | `savings list` |
-| target dana darurat naikin jadi 10 juta | `savings set-target "dana darurat" --target 10jt` |
+| target dana darurat naikin jadi 10 juta | `savings set "dana darurat" --target 10jt` |
 | sisa uang di BRI | `balance --account bri` |
-| sisa uang total | `balance` |
+| sisa uang total (dompet dan tabungan, terpisah) | `balance` |
+| berapa yang kupakai dari tabungan bulan ini (lihat `data.savings_expense`) | `report --period this-month --type expense` |
 | pengeluaran bulan ini | `report --period this-month --type expense` |
 | pengeluaran bulan Agustus | `report --period 2026-08 --type expense` |
 | pengeluaran 3 bulan terakhir | `report --period last:3 --type expense` |
@@ -3330,7 +3716,7 @@ Pedoman untuk pemanggil yang menerjemahkan chat bebas:
 | pinjam 50k dari Budi | `debt add --direction i_owe --person Budi --amount 50k` |
 | pinjam 300k dari Budi, janji balikin tanggal 20 | `debt add --direction i_owe --person Budi --amount 300k --due 2026-10-20` |
 | Andi pinjam 100k | `debt add --direction owed_to_me --person Andi --amount 100k` |
-| Andi pinjam 100k, ambil dari dana darurat | `debt add --direction owed_to_me --person Andi --amount 100k --budget "dana darurat"` |
+| Andi pinjam 100k dari BRI, potong dari budget jajan | `debt add --direction owed_to_me --person Andi --amount 100k --account bri --budget jajan` |
 | makan siang 25k dibayarin Citra | `debt add --direction i_owe --person Citra --amount 25k --paid-for "makan siang\|makan"` |
 | Rina traktir kopi 18k, nanti aku ganti | `debt add --direction i_owe --person Rina --amount 18k --paid-for "kopi"` |
 | aku masih utang 200k ke Dodi dari bulan lalu | `debt add --direction i_owe --person Dodi --amount 200k --no-cash --note "utang bulan lalu"` |
@@ -3356,7 +3742,8 @@ Isi `gajian.json` untuk chat terakhir:
 ```json file=gajian.json
 [
   {"cmd": "add", "args": {"type": "income", "item": "gajian|2jt|gaji", "raw": "gajian 2jt, langsung alokasi makan 800k dan nabung 300k"}},
-  {"cmd": "budget alloc", "args": {"item": ["makan|800k", "darurat|300k"]}}
+  {"cmd": "budget alloc", "args": {"item": "makan|800k"}},
+  {"cmd": "savings deposit", "args": {"from": "tunai", "to": "darurat", "amount": "300k"}}
 ]
 ```
 
@@ -3366,16 +3753,16 @@ python finance.py batch --file gajian.json
 ```json
 {
   "ok": true,
-  "message": "2 perintah dari batch tercatat sekaligus (satu undo membatalkan semuanya):\n1. Tercatat pemasukan gajian Rp2.000.000 (kategori gaji) ke tunai (dompet default). Sisa tunai Rp2.302.000. Sisa budget belum teralokasi Rp2.314.500.\n2. Dialokasikan Rp1.100.000 dari belum teralokasi: makan Rp800.000, darurat Rp300.000. Sisa budget makan Rp1.025.000, darurat Rp400.000, belum teralokasi Rp1.214.500.",
+  "message": "3 perintah dari batch tercatat sekaligus (satu undo membatalkan semuanya):\n1. Tercatat pemasukan gajian Rp2.000.000 (kategori gaji) ke tunai (dompet default). Sisa tunai Rp2.312.000. Sisa budget belum teralokasi Rp2.294.500.\n2. Dialokasikan Rp800.000 dari belum teralokasi: makan Rp800.000. Sisa budget makan Rp1.055.000, belum teralokasi Rp1.494.500.\n3. Menabung Rp300.000 dari tunai ke tabungan darurat (11,0% dari target Rp3.000.000); budget belum teralokasi berkurang Rp300.000. Sisa tunai Rp2.012.000, tabungan darurat Rp330.000. Sisa budget belum teralokasi Rp1.194.500.",
   "data": {
     "group_id": "<acak>",
-    "count": 2,
+    "count": 3,
     "source": "gajian.json",
     "results": [
       {
         "index": 1,
         "cmd": "add",
-        "message": "Tercatat pemasukan gajian Rp2.000.000 (kategori gaji) ke tunai (dompet default). Sisa tunai Rp2.302.000. Sisa budget belum teralokasi Rp2.314.500.",
+        "message": "Tercatat pemasukan gajian Rp2.000.000 (kategori gaji) ke tunai (dompet default). Sisa tunai Rp2.312.000. Sisa budget belum teralokasi Rp2.294.500.",
         "data": {
           "group_id": "<acak>",
           "type": "income",
@@ -3383,16 +3770,16 @@ python finance.py batch --file gajian.json
           "used_default_account": true,
           "ts": "2026-10-06 12:00:00",
           "total": 2000000,
-          "balance_after": 2302000,
+          "balance_after": 2312000,
           "items": [
             {
-              "id": 25,
+              "id": 32,
               "note": "gajian",
               "amount": 2000000,
               "category": "gaji",
               "category_source": "given",
               "budget": "belum teralokasi",
-              "budget_balance": 2314500
+              "budget_balance": 2294500
             }
           ]
         }
@@ -3400,25 +3787,46 @@ python finance.py batch --file gajian.json
       {
         "index": 2,
         "cmd": "budget alloc",
-        "message": "Dialokasikan Rp1.100.000 dari belum teralokasi: makan Rp800.000, darurat Rp300.000. Sisa budget makan Rp1.025.000, darurat Rp400.000, belum teralokasi Rp1.214.500.",
+        "message": "Dialokasikan Rp800.000 dari belum teralokasi: makan Rp800.000. Sisa budget makan Rp1.055.000, belum teralokasi Rp1.494.500.",
         "data": {
           "group_id": "<acak>",
-          "total": 1100000,
+          "total": 800000,
           "items": [
             {
-              "id": 8,
+              "id": 7,
               "budget": "makan",
               "amount": 800000,
-              "balance_after": 1025000
-            },
-            {
-              "id": 9,
-              "budget": "darurat",
-              "amount": 300000,
-              "balance_after": 400000
+              "balance_after": 1055000
             }
           ],
-          "unallocated_balance": 1214500
+          "unallocated_balance": 1494500
+        }
+      },
+      {
+        "index": 3,
+        "cmd": "savings deposit",
+        "message": "Menabung Rp300.000 dari tunai ke tabungan darurat (11,0% dari target Rp3.000.000); budget belum teralokasi berkurang Rp300.000. Sisa tunai Rp2.012.000, tabungan darurat Rp330.000. Sisa budget belum teralokasi Rp1.194.500.",
+        "data": {
+          "id": 33,
+          "group_id": "<acak>",
+          "from": "tunai",
+          "to": "darurat",
+          "amount": 300000,
+          "budget": "belum teralokasi",
+          "balance_from": 2012000,
+          "savings": {
+            "id": 4,
+            "name": "darurat",
+            "balance": 330000,
+            "target_amount": 3000000,
+            "target_date": "2027-06-30",
+            "archived": false,
+            "percent": 11.0,
+            "shortfall": 2670000,
+            "month_change": 330000,
+            "loans_outstanding": 0
+          },
+          "budget_balance": 1194500
         }
       }
     ]

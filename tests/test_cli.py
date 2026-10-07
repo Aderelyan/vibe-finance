@@ -53,8 +53,9 @@ def test_required_scenarios(tmp_path):
     assert bud("belum teralokasi") == before + 600_000
     r = run("budget", "alloc", "--item", "makan|300k", "--item", "transport|100k")
     assert r["data"]["total"] == 400_000
-    r = run("budget", "alloc", "--item", "tabungan|100k")
-    assert bud("tabungan") == 100_000
+    before = bud("belum teralokasi")
+    r = run("savings", "deposit", "--from", "bri", "--to", "tabungan", "--amount", "100k")
+    assert r["data"]["savings"]["balance"] == 100_000 and bud("belum teralokasi") == before - 100_000
     r = run("add", "--type", "expense", "--item", "jajan|10k|jajan", "--item", "es teh|3k|jajan")
     assert r["data"]["total"] == 13_000 and len(r["data"]["items"]) == 2
     r = run("add", "--type", "expense", "--item", "jajan, parkir, makan|50k|makan")
@@ -63,11 +64,11 @@ def test_required_scenarios(tmp_path):
     assert r["data"]["to_balance"] == 50_000
     assert run("budget", "list")["data"]["consistent"] is True
     assert run("savings", "list")["data"]["total"] == 100_000
-    assert run("balance", "--account", "bri")["data"]["balance"] == 500_000
+    assert run("balance", "--account", "bri")["data"]["balance"] == 400_000
     r = run("transfer", "--from", "bri", "--to", "tunai", "--amount", "200k", "--fee", "2.5k")
-    assert r["data"]["balance_from"] == 297_500
+    assert r["data"]["balance_from"] == 197_500
     r = run("adjust", "--account", "bri", "--actual", "450k")
-    assert r["data"]["difference"] == 152_500
+    assert r["data"]["difference"] == 252_500
     assert run("account", "add", "gopay", "--type", "ewallet", "--opening", "50k")["ok"]
     r = run("account", "remove", "gopay", "--move-to", "bri")
     assert r["data"]["moved_to"] == "bri" and run("balance", "--account", "bri")["data"]["balance"] == 500_000

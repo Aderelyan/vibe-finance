@@ -33,7 +33,12 @@ def make_v1(path):
     conn.close()
 
 
-def test_migrate_v1_to_v2(fin_home):
+def test_migrate_v1_to_latest(fin_home):
+    """v1 (dompet savings) -> v2 (budget tabungan) -> v4 (tabungan jadi akun terpisah).
+
+    Uang di dompet lama tidak berubah. Budget tabungan hasil v2 dikembalikan ke 'belum teralokasi' dan dibuat akun
+    tabungan kosong dengan target yang sama (nama dompet lama sudah terpakai, jadi diberi akhiran).
+    """
     home, fin = fin_home
     make_v1(home / "finance.db")
     r = fin.ok("init")
@@ -47,15 +52,17 @@ def test_migrate_v1_to_v2(fin_home):
     assert accounts["tunai"]["is_default"] is True
 
     savings = {s["name"]: s for s in fin.ok("savings", "list")["data"]["savings"]}
-    assert savings["tabungan"]["balance"] == 150_000
-    assert savings["tabungan"]["target_amount"] == 2_000_000 and savings["tabungan"]["target_date"] == "2027-01-01"
-    assert savings["celengan"]["balance"] == -10_000
+    assert set(savings) == {"tabungan (tabungan)", "celengan (tabungan)"}
+    assert savings["tabungan (tabungan)"]["balance"] == 0
+    assert savings["tabungan (tabungan)"]["target_amount"] == 2_000_000
+    assert savings["tabungan (tabungan)"]["target_date"] == "2027-01-01"
 
     bal = fin.ok("balance")["data"]
-    assert bal["total_dompet"] == 100_000 + 500_000 + 600_000 - 20_000
+    assert bal["total_dompet"] == 100_000 + 500_000 + 600_000 - 20_000 and bal["total_tabungan"] == 0
     assert bal["consistent"] is True
     unalloc = bal["budgets"][0]
-    assert unalloc["name"] == "belum teralokasi" and unalloc["balance"] == bal["total_dompet"] - 140_000
+    assert unalloc["name"] == "belum teralokasi" and unalloc["balance"] == bal["total_dompet"]
+    assert all(b["kind"] != "savings" for b in bal["budgets"])
 
     # semua transaksi lama (selain transfer) menunjuk ke belum teralokasi
     txs = fin.ok("list", "--period", "all", "--include-deleted")["data"]["transactions"]
@@ -66,12 +73,11 @@ def test_migrate_v1_to_v2(fin_home):
     r = fin.ok("undo")
     assert r["data"]["undone"] and r["data"]["transactions"][0]["note"] is None
     assert r["data"]["transactions"][0]["type"] == "transfer"
-    assert fin.ok("savings", "list")["data"]["savings"][1]["balance"] == -10_000
+    assert fin.ok("balance")["data"]["consistent"] is True
 
     # foreign key tetap utuh
     conn = sqlite3.connect(home / "finance.db")
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-    assert conn.execute("SELECT sql FROM sqlite_master WHERE name='accounts'").fetchone()[0].count("savings") == 0
     conn.close()
 
 
@@ -91,12 +97,54 @@ def test_migrate_v2_to_v3(fin_home):
     conn.execute("COMMIT")
     conn.close()
 
-    assert fin.ok("init")["data"]["schema_version"] == 3
-    assert any(p.name.endswith("pre-v3.db") for p in (home / "backups").iterdir())
+    assert fin.ok("init")["data"]["schema_version"] == db.SCHEMA_VERSION
+    assert any(p.name.endswith(f"pre-v{db.SCHEMA_VERSION}.db") for p in (home / "backups").iterdir())
     items = {r["name"]: r for r in fin.ok("recurring", "list", "--all")["data"]["recurring"]}
     assert items["kos"]["archived"] is False and items["gym"]["archived"] is True
     assert fin.ok("debt", "list")["data"]["debts"][0]["person"] == "Budi"
     fin.ok("recurring", "pay", "kos")
+    conn = sqlite3.connect(home / "finance.db")
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    conn.close()
+
+
+def test_migrate_v3_to_v4_savings_budget(fin_home):
+    """Budget tabungan bersaldo (model lama) menjadi akun tabungan; saldonya kembali ke 'belum teralokasi'."""
+    home, fin = fin_home
+    conn = sqlite3.connect(home / "finance.db", isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    conn.execute("BEGIN")
+    for v in (1, 2, 3):
+        db.MIGRATIONS[v](conn)
+    db.set_meta(conn, "schema_version", 3)
+    conn.execute("INSERT INTO accounts(id, name, type, is_default, created_at) VALUES (1, 'bri', 'bank', 1, ?)", (T,))
+    unalloc = conn.execute("SELECT id FROM budgets WHERE kind = 'unallocated'").fetchone()[0]
+    sav = conn.execute("INSERT INTO budgets(name, kind, target_amount, created_at) VALUES ('laptop', 'savings', "
+                       "8000000, ?)", (T,)).lastrowid
+    makan = conn.execute("SELECT id FROM categories WHERE name = 'makan' AND kind = 'expense'").fetchone()[0]
+    tx = "INSERT INTO transactions(ts, type, amount, account_id, category_id, budget_id, note, group_id, created_at) " \
+         "VALUES (?,?,?,?,?,?,?,?,?)"
+    conn.execute(tx, (T, "adjustment", 1_000_000, 1, None, unalloc, "saldo awal", "g1", T))
+    conn.execute("INSERT INTO budget_moves(ts, from_budget_id, to_budget_id, amount, group_id, created_at) "
+                 "VALUES (?,?,?,?,?,?)", (T, unalloc, sav, 300_000, "g2", T))
+    conn.execute(tx, (T, "expense", 50_000, 1, makan, sav, "makan dari tabungan", "g3", T))
+    for g in ("g1", "g2", "g3"):
+        conn.execute("INSERT INTO op_groups(group_id, action, created_at) VALUES (?, 'legacy', ?)", (g, T))
+    conn.execute("COMMIT")
+    conn.close()
+
+    assert fin.ok("init")["data"]["schema_version"] == 4
+    bal = fin.ok("balance")["data"]
+    assert bal["total_dompet"] == 950_000 and bal["consistent"] is True
+    assert bal["budgets"] == [{"id": unalloc, "name": "belum teralokasi", "kind": "unallocated", "balance": 950_000,
+                               "archived": False}]
+    sv = fin.ok("savings", "list")["data"]["savings"]
+    assert sv[0]["name"] == "laptop" and sv[0]["balance"] == 0 and sv[0]["target_amount"] == 8_000_000
+    # pindahan migrasi tidak bisa di-undo; undo membatalkan pengeluaran lama
+    assert fin.ok("undo")["data"]["action"] == "legacy"
+    # skema baru menerima tabungan sebagai akun
+    fin.ok("savings", "deposit", "--from", "bri", "--to", "laptop", "--amount", "100k")
+    assert fin.ok("savings", "list")["data"]["total"] == 100_000
     conn = sqlite3.connect(home / "finance.db")
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     conn.close()

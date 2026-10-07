@@ -2,7 +2,7 @@ def test_init_is_idempotent(fin):
     again = fin.ok("init")
     assert again["data"]["created"] is False
     assert again["data"]["categories"] == 18
-    assert again["data"]["schema_version"] == 3
+    assert again["data"]["schema_version"] == 4
     cats = fin.ok("category", "list")["data"]["categories"]
     names = {(c["name"], c["kind"]) for c in cats}
     assert ("biaya admin", "expense") in names and ("gaji", "income") in names
@@ -30,7 +30,12 @@ def test_account_validation(wallets):
     fin.err("BAD_ARGS", "account add", "x")  # perintah tidak dikenal
     fin.err("BAD_ARGS", "account", "add", "TUNAI", "--type", "cash")
     fin.err("BAD_ARGS", "account", "add", "dana", "--type", "crypto")
-    fin.err("BAD_ARGS", "account", "add", "celengan", "--type", "savings")
+    fin.err("BAD_ARGS", "account", "add", "celengan", "--type", "savings")  # tabungan lewat savings add
+    fin.err("BAD_ARGS", "account", "add", "tabungan", "--type", "bank")  # nama sudah dipakai tabungan
+    r = fin.err("UNKNOWN_ACCOUNT", "account", "set-default", "tabungan")
+    assert "tabungan, bukan dompet" in r["error"]["message"]
+    fin.err("UNKNOWN_ACCOUNT", "account", "rename", "tabungan", "celengan")
+    fin.err("UNKNOWN_ACCOUNT", "account", "remove", "tabungan")
     fin.err("BAD_AMOUNT", "account", "add", "dana", "--type", "ewallet", "--opening", "banyak")
     fin.err("BAD_ARGS", "account", "archive", "gopay")  # diganti account remove
     assert len(fin.ok("account", "list")["data"]["accounts"]) == 3
@@ -148,7 +153,7 @@ def test_categories_add_rename_remove(wallets):
     assert "belum teralokasi" in r["message"]
     fin.err("BAD_ARGS", "category", "add", "Makan", "--kind", "expense")
     fin.ok("category", "add", "makan", "--kind", "income")  # nama sama, jenis beda boleh
-    fin.err("BAD_ARGS", "category", "add", "tabungan", "--kind", "expense")  # bentrok dengan tabungan
+    fin.ok("category", "add", "tabungan", "--kind", "expense")  # tabungan bukan budget lagi, jadi tidak bentrok
     fin.err("SYSTEM_PROTECTED", "category", "add", "belum teralokasi", "--kind", "expense")
 
     r = fin.ok("category", "remove", "kucing", "--kind", "expense")

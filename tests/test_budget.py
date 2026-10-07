@@ -72,8 +72,11 @@ def test_move_and_move_all(wallets):
     fin.ok("budget", "alloc", "--item", "makan|300k")
     r = fin.ok("budget", "move", "--from", "makan", "--to", "jajan", "--amount", "50k")
     assert r["data"]["from_balance"] == 250_000 and r["data"]["to_balance"] == 50_000
-    r = fin.ok("budget", "move", "--from", "jajan", "--to", "tabungan", "--amount", "all")
+    r = fin.ok("budget", "move", "--from", "jajan", "--to", "transport", "--amount", "all")
     assert r["data"]["amount"] == 50_000 and budget_bal(fin, "jajan") == 0
+    # tabungan bukan budget: hint mengarahkan ke savings deposit
+    r = fin.err("UNKNOWN_BUDGET", "budget", "move", "--from", "makan", "--to", "tabungan", "--amount", "1k")
+    assert "savings deposit" in r["error"]["hint"]
     fin.err("BAD_AMOUNT", "budget", "move", "--from", "jajan", "--to", "makan", "--amount", "all")
     fin.err("BAD_ARGS", "budget", "move", "--from", "makan", "--to", "Makan", "--amount", "1k")
     fin.err("UNKNOWN_BUDGET", "budget", "move", "--from", "kesehatan", "--to", "makan", "--amount", "1k")
@@ -173,28 +176,36 @@ def test_edit_category_moves_budget(wallets):
     assert budget_bal(fin, "makan") == 100_000 and budget_bal(fin, "jajan") == 80_000
     fin.ok("edit", tx, "--category", "kesehatan")  # tanpa budget -> belum teralokasi
     assert budget_bal(fin, "jajan") == 100_000 and budget_bal(fin, UNALLOC) == 480_000
-    fin.ok("edit", tx, "--budget", "tabungan")
-    assert budget_bal(fin, "tabungan") == -20_000
+    fin.ok("edit", tx, "--budget", "jajan")
+    assert budget_bal(fin, "jajan") == 80_000
+    fin.err("UNKNOWN_BUDGET", "edit", tx, "--budget", "tabungan")
     fin.err("UNKNOWN_BUDGET", "edit", tx, "--budget", "")
 
 
-def test_add_with_budget_from_savings(wallets):
+def test_add_with_budget(wallets):
     fin = wallets
-    fin.ok("budget", "alloc", "--item", "tabungan|500k")
-    r = fin.ok("add", "--type", "expense", "--account", "bri", "--budget", "tabungan",
+    fin.ok("budget", "alloc", "--item", "jajan|500k")
+    r = fin.ok("add", "--type", "expense", "--account", "bri", "--budget", "jajan",
                "--item", "laptop bekas|300k|belanja")
-    assert r["data"]["items"][0]["budget"] == "tabungan" and "Diambil dari budget tabungan" in r["message"]
-    assert budget_bal(fin, "tabungan") == 200_000
+    assert r["data"]["items"][0]["budget"] == "jajan" and "Diambil dari budget jajan" in r["message"]
+    assert budget_bal(fin, "jajan") == 200_000
     assert fin.ok("report", "--category", "belanja")["data"]["total"] == 300_000
+    # tabungan bukan budget: belanja dari tabungan lewat savings spend
+    r = fin.err("UNKNOWN_BUDGET", "add", "--type", "expense", "--budget", "tabungan", "--item", "x|1k")
+    assert "savings spend" in r["error"]["hint"]
     fin.err("UNKNOWN_BUDGET", "add", "--type", "expense", "--budget", "liburan", "--item", "x|1k")
     fin.err("UNKNOWN_BUDGET", "add", "--type", "expense", "--budget", "pendidikan", "--item", "x|1k")
+    fin.err("UNKNOWN_BUDGET", "budget", "alloc", "--item", "makan|1k", "--item", "tabungan|1k")
+    assert "makan" not in [b["name"] for b in fin.ok("budget", "list")["data"]["budgets"]]  # semua atau tidak
 
 
 def test_balance_two_sides(wallets):
     fin = wallets
-    fin.ok("budget", "alloc", "--item", "makan|200k", "--item", "tabungan|100k")
+    fin.ok("budget", "alloc", "--item", "makan|200k")
+    fin.ok("savings", "deposit", "--from", "bri", "--to", "tabungan", "--amount", "100k")
     data = fin.ok("balance")["data"]
-    assert data["total_dompet"] == 700_000 and data["total_budget"] == 700_000 and data["consistent"] is True
-    assert data["savings_total"] == 100_000 and data["non_savings_total"] == 600_000
+    assert data["total_dompet"] == 600_000 and data["total_budget"] == 600_000 and data["consistent"] is True
+    assert data["total_tabungan"] == 100_000 and data["net_worth"] == 700_000
+    assert all(b["kind"] != "savings" for b in data["budgets"])
     msg = fin.ok("balance")["message"]
-    assert "Per dompet" in msg and "Per budget" in msg
+    assert "Dompet" in msg and "Per budget" in msg and "Tabungan" in msg

@@ -47,11 +47,14 @@ def test_budget_option_only_for_money_out(wallets):
             "--budget", "liburan")
     assert fin.count_tx() == n
 
-    # bayar hutang (uang keluar) boleh dari budget tertentu, termasuk tabungan
-    fin.ok("budget", "alloc", "--item", "tabungan|100k")
+    # bayar hutang (uang keluar) boleh dari budget tertentu
+    fin.ok("budget", "alloc", "--item", "jajan|100k")
     fin.ok("debt", "add", "--direction", "i_owe", "--person", "Budi", "--amount", "40k")
-    fin.ok("debt", "pay", "--person", "Budi", "--amount", "40k", "--budget", "tabungan")
-    assert bud(fin, "tabungan") == 60_000
+    fin.ok("debt", "pay", "--person", "Budi", "--amount", "40k", "--budget", "jajan")
+    assert bud(fin, "jajan") == 60_000
+    # hutang biasa tidak lewat tabungan
+    fin.err("UNKNOWN_ACCOUNT", "debt", "add", "--direction", "i_owe", "--person", "Budi", "--amount", "1k",
+            "--account", "tabungan")
     # terima pembayaran piutang (uang masuk) tidak boleh --budget
     fin.err("BAD_ARGS", "debt", "pay", "--person", "Andi", "--amount", "10k", "--budget", "makan")
 

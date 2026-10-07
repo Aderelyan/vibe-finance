@@ -88,7 +88,8 @@ def _money_budget(conn, name, money_out, hint_cmd):
 
 def _person_total_text(conn, debt):
     rows = [d for d in debts.person_matches(conn, debt["person"])
-            if d["direction"] == debt["direction"] and d["status"] == "open"]
+            if d["direction"] == debt["direction"] and d["status"] == "open"
+            and debts.is_savings_debt(d) == debts.is_savings_debt(debt)]
     total = sum(debts.remaining(conn, d) for d in rows)
     text = f"Total {debts.title(debt)} sekarang {rupiah(total)}"
     if len(rows) > 1:
@@ -214,6 +215,8 @@ def cmd_pay(args, conn):
                                       f"(#{debt['id']}) yaitu {rupiah(rest)}.",
                        hint=f"Bayar paling banyak {rupiah(rest)}, atau pakai --amount all untuk melunasi.",
                        data={"remaining": rest})
+    if debts.is_savings_debt(debt):
+        return _pay_savings_loan(args, conn, debt, amount)
     money_out = debt["direction"] == "i_owe"
     acc, used_default = resolve.account_or_default(conn, args.account)
     bud = _money_budget(conn, args.budget, money_out, "pembayaran piutang yang kamu terima")
@@ -248,6 +251,50 @@ def cmd_pay(args, conn):
                          "balance_after": balance(conn, acc["id"])})
 
 
+def _pay_savings_loan(args, conn, debt, amount):
+    """Kembalikan pinjaman dari tabungan: dompet -X dan budget kategori -X (dicatat sebagai pengeluaran di
+    kategori barang yang dulu dibeli), tabungan +X. Dua transaksi dalam satu group."""
+    loan = conn.execute("SELECT * FROM transactions WHERE debt_id = ? AND type = 'savings_loan' ORDER BY "
+                        "deleted_at IS NOT NULL, id LIMIT 1", (debt["id"],)).fetchone()
+    cat = None
+    if loan is not None and loan["category_id"] is not None:
+        cat = conn.execute("SELECT * FROM categories WHERE id = ?", (loan["category_id"],)).fetchone()
+    cat = cat or resolve.category_by_name(conn, "lainnya", "expense")
+    acc, used_default = resolve.account_or_default(conn, args.account)
+    bud = budgets.find(conn, args.budget) if args.budget else None
+    savings = conn.execute("SELECT * FROM accounts WHERE id = ?", (debt["savings_account_id"],)).fetchone()
+    ts = parse_date(args.date) if args.date else clock.now_ts()
+    item = debt["note"] or "pinjaman tabungan"
+
+    with write(conn):
+        bud = bud or budgets.for_expense(conn, cat["id"])
+        group = new_group(conn, "debt_pay")
+        expense_id = insert_tx(conn, ts=ts, type="expense", amount=amount, account_id=acc["id"], category_id=cat["id"],
+                               budget_id=bud["id"], note=f"{item} (kembalikan ke tabungan {savings['name']})"
+                               + (f" ({args.note})" if args.note else ""), raw_text=args.raw, group_id=group)
+        tx_id = insert_tx(conn, ts=ts, type="savings_repay", amount=amount, account_id=savings["id"],
+                          debt_id=debt["id"], note=f"pengembalian pinjaman: {item}", raw_text=args.raw,
+                          group_id=group)
+        debts.recompute_status(conn, debt["id"])
+    debt = conn.execute("SELECT * FROM debts WHERE id = ?", (debt["id"],)).fetchone()
+    left = debts.remaining(conn, debt)
+
+    acc_text = acc["name"] + (" (dompet default)" if used_default else "")
+    msg = (f"Kembalikan {rupiah(amount)} ke tabungan {savings['name']} dari {acc_text}, dicatat sebagai pengeluaran "
+           f"{item} (kategori {cat['name']}, budget {bud['name']}).")
+    msg += (f" {debts.title(debt, cap=True)} (#{debt['id']}) LUNAS." if left == 0 else
+            f" Sisa {debts.title(debt)} (#{debt['id']}) {rupiah(left)}.")
+    if ts[:10] != clock.today().isoformat():
+        msg += f" Tanggal: {fmt_date(ts)}."
+    msg += " " + balance_sentence(conn, [acc["id"], savings["id"]]) + " " + budgets.sentence(conn, [bud["id"]])
+    return success(msg, {"debt": debts.info(conn, debt), "transaction_id": tx_id, "expense_id": expense_id,
+                         "group_id": group, "amount": amount, "remaining": left, "paid_off": left == 0,
+                         "account": acc["name"], "used_default_account": used_default, "budget": bud["name"],
+                         "category": cat["name"], "savings": savings["name"],
+                         "balance_after": balance(conn, acc["id"]),
+                         "savings_balance_after": balance(conn, savings["id"])})
+
+
 # ---------- list ----------
 
 def cmd_list(args, conn):
@@ -262,10 +309,11 @@ def cmd_list(args, conn):
         rows = [d for d in rows if resolve.norm(d["person"]) == key]
     items = [debts.info(conn, d) for d in rows]
     owe, owed = debts.totals(conn)
+    loans = debts.savings_loans_total(conn)
     soon = [i for i in items if i["status"] == "open" and not i["archived"]
             and i["days_until_due"] is not None and i["days_until_due"] <= 7]
     data = {"debts": items, "count": len(items), "debt_total": owe, "receivable_total": owed,
-            "due_within_7_days": [i["id"] for i in soon]}
+            "savings_loans_total": loans, "due_within_7_days": [i["id"] for i in soon]}
 
     status_word = {"open": "yang belum lunas", "paid": "yang sudah lunas", "all": ""}[args.status]
     scope = f" atas nama {args.person}" if args.person else ""
@@ -273,13 +321,18 @@ def cmd_list(args, conn):
         msg = f"Tidak ada hutang/piutang {status_word}{scope}.".replace("  ", " ")
     else:
         lines = []
-        for direction, head in (("i_owe", "Hutang saya"), ("owed_to_me", "Piutang (orang berhutang ke saya)")):
-            group = [i for i in items if i["direction"] == direction]
+        sections = (("Hutang saya", lambda i: i["direction"] == "i_owe" and not i["savings"]),
+                    ("Piutang (orang berhutang ke saya)", lambda i: i["direction"] == "owed_to_me"),
+                    ("Pinjaman dari tabungan sendiri", lambda i: bool(i["savings"])))
+        for head, keep in sections:
+            group = [i for i in items if keep(i)]
             if group:
                 lines.append(f"{head}:")
                 lines += [f"- {debts.line(i)}" for i in group]
         msg = "\n".join(lines)
     msg += f"\nTotal hutang saya: {rupiah(owe)} | Total piutang: {rupiah(owed)}."
+    if loans:
+        msg += f" Pinjaman dari tabungan yang belum dikembalikan: {rupiah(loans)}."
     overdue = [i for i in soon if i["days_until_due"] < 0]
     if overdue:
         msg += f" Ada {len(overdue)} yang sudah lewat jatuh tempo."
@@ -320,8 +373,12 @@ def cmd_rename(args, conn):
     if not rows:
         raise FinError("NOT_FOUND", f"Tidak ada hutang/piutang atas nama '{old}'.",
                        hint="Lihat daftar: debt list --status all")
+    if any(debts.is_savings_debt(d) for d in rows):
+        raise FinError("BAD_ARGS", f"'{rows[0]['person']}' adalah tabungan; nama pinjamannya mengikuti nama tabungan.",
+                       hint=f"Ganti nama tabungannya: savings rename \"{rows[0]['person']}\" <nama baru>")
     new = resolve.clean_name(args.new_name, "nama orang")
-    others = [d for d in debts.person_matches(conn, new, include_archived=True) if d["id"] not in {r["id"] for r in rows}]
+    others = [d for d in debts.person_matches(conn, new, include_archived=True)
+              if d["id"] not in {r["id"] for r in rows} and not debts.is_savings_debt(d)]
     with write(conn):
         for d in rows:
             conn.execute("UPDATE debts SET person = ? WHERE id = ?", (new, d["id"]))

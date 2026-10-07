@@ -3,7 +3,9 @@ import json
 
 from .. import budgets, clock, debts, recurring, resolve
 from ..db import UNALLOCATED, write
-from ..ledger import (TX_SELECT, balance, balance_sentence, get_tx, insert_tx, new_group, tx_dict, tx_line)
+from ..ledger import (TWO_SIDED, TX_SELECT, balance, balance_sentence, get_tx, insert_tx, new_group, tx_dict,
+                      tx_line)
+from ..ledger import is_savings as ledger_is_savings
 from ..output import FinError, fmt_date, fmt_ts, rupiah, signed_rupiah, success
 from ..parse import parse_amount, parse_date
 
@@ -196,27 +198,32 @@ def cmd_transfer(args, conn):
 # ---------- adjust ----------
 
 def cmd_adjust(args, conn):
-    acc = resolve.account(conn, args.account)
+    acc = resolve.account(conn, args.account, kind=None)
+    savings = acc["type"] == "savings"
     actual = parse_amount(args.actual, allow_zero=True, allow_negative=True, field="saldo sebenarnya")
     current = balance(conn, acc["id"])
     diff = actual - current
+    label = ("tabungan " if savings else "") + acc["name"]
     if diff == 0:
-        return success(f"Saldo {acc['name']} sudah {rupiah(actual)}, tidak ada perubahan.",
+        return success(f"Saldo {label} sudah {rupiah(actual)}, tidak ada perubahan.",
                        {"account": acc["name"], "before": current, "after": actual, "difference": 0, "id": None})
-    unalloc = budgets.unallocated(conn)
+    unalloc = None if savings else budgets.unallocated(conn)
     with write(conn):
         group = new_group(conn, "adjust")
         tx_id = insert_tx(conn, ts=clock.now_ts(), type="adjustment", amount=diff, account_id=acc["id"],
-                          budget_id=unalloc["id"], note=args.note or "penyesuaian saldo", group_id=group)
-    msg = (f"Saldo {acc['name']} disesuaikan dari {rupiah(current)} menjadi {rupiah(actual)} "
-           f"(selisih {signed_rupiah(diff)}). Selisih ini {'masuk ke' if diff > 0 else 'keluar dari'} "
-           f"budget {UNALLOCATED} dan tidak dihitung sebagai pemasukan atau pengeluaran. "
-           + budgets.sentence(conn, [unalloc["id"]]))
+                          budget_id=unalloc["id"] if unalloc else None, note=args.note or "penyesuaian saldo",
+                          group_id=group)
+    msg = f"Saldo {label} disesuaikan dari {rupiah(current)} menjadi {rupiah(actual)} (selisih {signed_rupiah(diff)})."
+    if savings:
+        msg += " Tabungan di luar budget, jadi budget tidak berubah; tidak dihitung sebagai pemasukan atau pengeluaran."
+    else:
+        msg += (f" Selisih ini {'masuk ke' if diff > 0 else 'keluar dari'} budget {UNALLOCATED} dan tidak dihitung "
+                f"sebagai pemasukan atau pengeluaran. " + budgets.sentence(conn, [unalloc["id"]]))
     if actual < 0:
         msg += f" Peringatan: saldo {acc['name']} minus."
     return success(msg, {"account": acc["name"], "before": current, "after": actual, "difference": diff,
-                         "id": tx_id, "group_id": group,
-                         "unallocated_balance": budgets.balances(conn)[unalloc["id"]]})
+                         "id": tx_id, "group_id": group, "savings": savings,
+                         "unallocated_balance": budgets.balances(conn)[unalloc["id"]] if unalloc else None})
 
 
 # ---------- edit ----------
@@ -238,12 +245,15 @@ def cmd_edit(args, conn):
         raise FinError("BAD_ARGS", "Tidak ada yang diubah.",
                        hint="Isi minimal satu: --amount, --category, --budget, --account, --to, --note, --date.")
     t = row["type"]
+    from_savings = row["account_type"] == "savings"
+    to_savings = row["to_account_id"] is not None and ledger_is_savings(conn, row["to_account_id"])
     updates, changes = {}, []
 
     if args.amount is not None:
-        if t in ("debt_in", "debt_out"):
+        if t in ("debt_in", "debt_out", "savings_loan", "savings_repay"):
             raise FinError("BAD_ARGS", "Nominal transaksi hutang tidak bisa diubah lewat edit.",
-                           hint=f"Hapus transaksinya (delete {row['id']}) lalu catat ulang lewat perintah debt.")
+                           hint=f"Hapus transaksinya (delete {row['id']}) lalu catat ulang lewat perintah debt "
+                                f"atau savings.")
         amount = parse_amount(args.amount, allow_negative=(t == "adjustment"))
         if amount != row["amount"]:
             updates["amount"] = amount
@@ -256,30 +266,35 @@ def cmd_edit(args, conn):
         if cat["id"] != row["category_id"]:
             updates["category_id"] = cat["id"]
             changes.append(("kategori", row["category"], cat["name"]))
-            if t == "expense":
+            if t == "expense" and not from_savings:
                 new_budget = budgets.for_expense(conn, cat["id"])
     if args.budget is not None:
-        if t != "expense":
-            raise FinError("BAD_ARGS", "--budget hanya untuk pengeluaran.")
+        if t not in ("expense", "deposit", "withdraw") or (t == "expense" and from_savings):
+            raise FinError("BAD_ARGS", "--budget hanya untuk pengeluaran dari dompet, menabung, atau tarik tabungan.",
+                           hint="Pengeluaran dari tabungan tidak memakai budget.")
         new_budget = budgets.find(conn, args.budget)
     if new_budget is not None and new_budget["id"] != row["budget_id"]:
         updates["budget_id"] = new_budget["id"]
         changes.append(("budget", row["budget"], new_budget["name"]))
     new_from, new_to = row["account_id"], row["to_account_id"]
     if args.account is not None:
-        acc = resolve.account(conn, args.account)
+        if t in ("savings_loan", "savings_repay"):
+            raise FinError("BAD_ARGS", "Tabungan pada pinjaman tabungan tidak bisa diganti lewat edit.")
+        # dompet hanya bisa diganti dengan dompet sekelas: operasional dengan operasional, tabungan dengan tabungan
+        acc = resolve.account(conn, args.account, kind="savings" if from_savings else "operational")
         if acc["id"] != row["account_id"]:
             new_from = updates["account_id"] = acc["id"]
-            changes.append(("dompet" if t != "transfer" else "dompet asal", row["account"], acc["name"]))
+            changes.append(("dompet" if t not in TWO_SIDED else "dompet asal", row["account"], acc["name"]))
     if args.to_account is not None:
-        if t != "transfer":
-            raise FinError("BAD_ARGS", "--to hanya untuk transaksi transfer.", hint="Untuk ganti dompet pakai --account.")
-        acc = resolve.account(conn, args.to_account)
+        if t not in TWO_SIDED:
+            raise FinError("BAD_ARGS", "--to hanya untuk transfer, menabung, atau tarik tabungan.",
+                           hint="Untuk ganti dompet pakai --account.")
+        acc = resolve.account(conn, args.to_account, kind="savings" if to_savings else "operational")
         if acc["id"] != row["to_account_id"]:
             new_to = updates["to_account_id"] = acc["id"]
             changes.append(("dompet tujuan", row["to_account"], acc["name"]))
-    if t == "transfer" and new_from == new_to:
-        raise FinError("BAD_ARGS", "Dompet asal dan tujuan transfer tidak boleh sama.")
+    if t in TWO_SIDED and new_from == new_to:
+        raise FinError("BAD_ARGS", "Dompet asal dan tujuan tidak boleh sama.")
     if args.note is not None:
         note = args.note.strip() or None
         if note != row["note"]:
@@ -302,7 +317,7 @@ def cmd_edit(args, conn):
             debts.recompute_status(conn, row["debt_id"])
     after = get_tx(conn, row["id"])
     affected = [row["account_id"], after["account_id"]]
-    if t == "transfer":
+    if t in TWO_SIDED:
         affected += [row["to_account_id"], after["to_account_id"]]
     msg = (f"Transaksi #{row['id']} diubah: " + "; ".join(f"{k} {a} → {b}" for k, a, b in changes) + ". "
            + balance_sentence(conn, affected))
@@ -389,7 +404,7 @@ def cmd_undo(args, conn):
             ref = conn.execute(f"SELECT * FROM {table} WHERE id = ?", (ref_id,)).fetchone()
             name = debts.title(ref) if table == "debts" else ref["name"]
             (removed if archived else restored).append({"table": table, "id": ref_id, "name": name})
-            if table == "accounts" and not conn.execute(
+            if table == "accounts" and ref["type"] != "savings" and not conn.execute(
                     "SELECT 1 FROM accounts WHERE is_default = 1 AND archived = 0").fetchone():
                 conn.execute("UPDATE accounts SET is_default = 1 WHERE id = ?", (ref_id,))
 

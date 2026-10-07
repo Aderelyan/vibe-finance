@@ -10,7 +10,8 @@ from pathlib import Path
 from ..db import batch
 from ..output import FinError, success
 
-ALLOWED = ["add", "transfer", "adjust", "budget alloc", "budget move", "debt add", "debt pay", "recurring pay"]
+ALLOWED = ["add", "transfer", "adjust", "budget alloc", "budget move", "debt add", "debt pay", "recurring pay",
+           "savings deposit", "savings withdraw", "savings spend"]
 MAX_COMMANDS = 200
 FORMAT_HINT = ('Isi harus daftar JSON, contoh: [{"cmd": "add", "args": {"type": "expense", '
                '"item": ["kopi|8k|jajan"]}}]. Lihat bagian batch di COMMANDS.md.')

@@ -15,18 +15,22 @@ def test_demo_numbers(tmp_path, monkeypatch):
     expense_total = expenses + bills + fees + demo.PAID_FOR[1]
     income_total = demo.SALARY * 2
     debt_flow = demo.DEBT_BUDI[1] - demo.PAY_BUDI[1] - demo.DEBT_ANDI[1] + demo.PAY_ANDI[1] + demo.PAID_FOR[1]
-    total = sum(demo.OPENING.values()) + income_total - expense_total + debt_flow
+    deposits = demo.DEPOSIT * 2
+    total = sum(demo.OPENING.values()) + income_total - expense_total + debt_flow - deposits
+    savings_total = deposits - demo.SAVINGS_SPEND[2]
 
     bal = r["balance"]["data"]
-    assert bal["total_dompet"] == total == 3_676_000
+    assert bal["total_dompet"] == total == 3_076_000
     assert bal["total_budget"] == total and bal["consistent"] is True
+    assert bal["total_tabungan"] == savings_total == 350_000
     assert bal["debt_total"] == demo.DEBT_BUDI[1] - demo.PAY_BUDI[1] + demo.PAID_FOR[1]
     assert bal["receivable_total"] == demo.DEBT_ANDI[1] - demo.PAY_ANDI[1]
-    assert bal["net_worth"] == total + bal["receivable_total"] - bal["debt_total"]
+    assert bal["net_worth"] == total + savings_total + bal["receivable_total"] - bal["debt_total"]
 
     rep = r["report"]["data"]
     assert rep["income"]["total"] == income_total
-    assert rep["expense"]["total"] == expense_total
+    assert rep["expense"]["total"] == expense_total  # belanja dari tabungan tidak ikut
+    assert rep["savings_expense"]["total"] == demo.SAVINGS_SPEND[2]
 
     budgets = {b["name"]: b["balance"] for b in r["budget"]["data"]["budgets"]}
     alloc = dict(demo.ALLOC)
@@ -34,8 +38,10 @@ def test_demo_numbers(tmp_path, monkeypatch):
     assert budgets["makan"] == alloc["makan"] * 2 - spent("makan") - demo.PAID_FOR[1] + demo.MOVE[3]
     assert budgets["jajan"] == alloc["jajan"] * 2 - spent("jajan") - demo.MOVE[3]
     assert budgets["tempat tinggal"] == 0 and budgets["pulsa & internet"] == 0
-    assert budgets["dana darurat"] == alloc["dana darurat"] * 2
-    assert r["savings"]["data"]["total"] == 600_000
+    assert budgets["belum teralokasi"] == 692_000  # sama dengan saat tabungan masih budget: tabungan di luar budget
+    assert "dana darurat" not in budgets
+    sv = r["savings"]["data"]
+    assert sv["total"] == savings_total and sv["savings"][0]["percent"] == 11.7
 
     a = r["analyze"]["data"]
     sep = [x for x in demo.EXPENSES if x[0].startswith("2026-09")]
@@ -44,6 +50,7 @@ def test_demo_numbers(tmp_path, monkeypatch):
     assert a["frequent_small"] == [{"note": "kopi", "count": 6, "total": 48_000, "category": "jajan"}]
     assert a["projection"]["projected_expense"] == sep_total  # hari terakhir bulan
     assert len(a["debts"]["due_within_7_days"]) == 2
+    assert a["savings"]["expense"]["total"] == demo.SAVINGS_SPEND[2] and a["savings"]["total"] == savings_total
 
     path = r["export"]["data"]["path"]
     wb = load_workbook(path)

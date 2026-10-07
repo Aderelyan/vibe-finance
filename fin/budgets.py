@@ -1,18 +1,19 @@
 """Budget sistem amplop. Saldo budget tidak disimpan, selalu dihitung.
 
-Aturan utama: total semua dompet = total semua budget. Ini dijaga karena setiap transaksi
-selain transfer menunjuk ke tepat satu budget, dan pindahan budget selalu berpasangan.
+Aturan utama: total dompet operasional = total semua budget. Ini dijaga karena setiap transaksi yang mengubah
+total dompet operasional menunjuk ke tepat satu budget (lihat ledger.py), dan pindahan budget selalu berpasangan.
+Tabungan bukan budget (sejak skema v4); budget berjenis 'savings' hanya sisa lama yang sudah diarsipkan.
 """
 from . import clock, resolve
 from .db import UNALLOCATED
+from .ledger import BUDGET_SIGN_SQL
 from .output import FinError, rupiah
 
-KIND_LABEL = {"unallocated": "sistem", "category": "kategori", "savings": "tabungan"}
+KIND_LABEL = {"unallocated": "sistem", "category": "kategori", "savings": "tabungan lama"}
 
-_BALANCE_SQL = """
+_BALANCE_SQL = f"""
 SELECT bud, SUM(delta) AS bal FROM (
-  SELECT budget_id AS bud,
-         CASE WHEN type IN ('income','debt_in','adjustment') THEN amount ELSE -amount END AS delta
+  SELECT budget_id AS bud, {BUDGET_SIGN_SQL} AS delta
     FROM transactions WHERE deleted_at IS NULL AND budget_id IS NOT NULL
   UNION ALL
   SELECT to_budget_id AS bud, amount AS delta FROM budget_moves WHERE deleted_at IS NULL
@@ -60,6 +61,14 @@ def _hint(conn):
             + ". Kategori pengeluaran tanpa budget juga bisa diberi alokasi, contoh: budget alloc --item \"makan|300k\".")
 
 
+def _savings_named(conn, name):
+    key = resolve.norm(name)
+    for r in conn.execute("SELECT * FROM accounts WHERE type = 'savings' AND archived = 0"):
+        if resolve.norm(r["name"]) == key:
+            return r
+    return None
+
+
 def name_taken(conn, name, except_budget_id=None):
     """Budget (aktif maupun ditutup) yang memakai nama ini, atau None."""
     key = resolve.norm(name)
@@ -92,10 +101,12 @@ def find(conn, name, *, create=False, include_archived=False):
                            hint=f"Beri alokasi dulu, contoh: budget alloc --item \"{cat['name']}|100k\". "
                                 f"Selama belum punya budget, pengeluaran {cat['name']} memakai {UNALLOCATED}.")
         return ensure_category_budget(conn, cat)
-    for row in matched:  # hanya ada versi yang ditutup
-        if row["kind"] == "savings":
-            raise FinError("UNKNOWN_BUDGET", f"Tabungan '{row['name']}' sudah dihapus.",
-                           hint=f"Buat lagi dengan: savings add \"{row['name']}\"")
+    sav = _savings_named(conn, name)
+    if sav is not None:
+        raise FinError("UNKNOWN_BUDGET", f"'{sav['name']}' adalah tabungan, bukan budget.",
+                       hint=f"Menabung: savings deposit --from <dompet> --to \"{sav['name']}\" --amount <jumlah>. "
+                            f"Belanja dari tabungan: savings spend --from \"{sav['name']}\" --item ... --mode purpose. "
+                            + _hint(conn))
     raise FinError("UNKNOWN_BUDGET", f"Budget '{name}' tidak ada.", hint=_hint(conn))
 
 
@@ -173,9 +184,7 @@ def overview(conn):
     rows = [r for r in rows if not r["archived"] or bals[r["id"]] != 0]
     items = [{"id": r["id"], "name": r["name"], "kind": r["kind"], "balance": bals[r["id"]],
               "archived": bool(r["archived"])} for r in rows]
-    total = sum(bals.values())
-    savings = sum(b for bid, b in bals.items() if get(conn, bid)["kind"] == "savings")
-    return {"budgets": items, "total_budget": total, "savings_total": savings, "non_savings_total": total - savings}
+    return {"budgets": items, "total_budget": sum(bals.values())}
 
 
 def line(item):

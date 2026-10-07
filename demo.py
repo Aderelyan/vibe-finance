@@ -1,5 +1,7 @@
 """Demo: database baru di folder sementara, skenario dua bulan (Agustus-September 2026), lalu cetak hasilnya.
 
+Termasuk tabungan terpisah: menabung tiap bulan dan satu belanja langsung dari tabungan.
+
 Jalankan: python demo.py
 Angka akhirnya diperiksa oleh tests/test_demo.py.
 """
@@ -17,7 +19,10 @@ END = "2026-09-30 21:00:00"   # "sekarang" di akhir demo
 OPENING = {"tunai": 200_000, "bri": 1_500_000}
 SALARY = 2_000_000            # gajian tanggal 1 tiap bulan, ke bri
 ALLOC = [("makan", 900_000), ("jajan", 200_000), ("transport", 300_000), ("tempat tinggal", 600_000),
-         ("pulsa & internet", 150_000), ("dana darurat", 300_000)]
+         ("pulsa & internet", 150_000)]
+SAVINGS = "dana darurat"        # tabungan: akun terpisah dari dompet dan budget
+DEPOSIT = 300_000               # menabung tanggal 1 tiap bulan dari bri (budget 'belum teralokasi' berkurang)
+SAVINGS_SPEND = ("2026-09-22", "servis motor", 250_000, "transport")   # belanja langsung dari tabungan
 BILLS = [("kos", 600_000, 5), ("wifi", 150_000, 10)]   # dibayar dari bri tanggal jatuh temponya
 WITHDRAW = (500_000, 2_500)  # tarik tunai dari bri tanggal 3 tiap bulan, beserta biaya admin
 
@@ -93,7 +98,7 @@ def _scenario(run):
     run(start, "init")
     run(start, "account", "add", "tunai", "--type", "cash", "--opening", OPENING["tunai"], "--default")
     run(start, "account", "add", "bri", "--type", "bank", "--opening", OPENING["bri"])
-    run(start, "savings", "add", "dana darurat", "--target", "3jt", "--target-date", "2027-06-30")
+    run(start, "savings", "add", SAVINGS, "--target", "3jt", "--target-date", "2027-06-30")
     for name, amount, day in BILLS:
         run(start, "recurring", "add", name, "--amount", amount, "--day", day, "--account", "bri")
 
@@ -101,6 +106,7 @@ def _scenario(run):
         now = _ts(f"{month}-01", "08:00:00")
         run(now, "add", "--type", "income", "--account", "bri", "--item", f"gajian|{SALARY}|gaji")
         run(now, "budget", "alloc", *[x for name, amt in ALLOC for x in ("--item", f"{name}|{amt}")])
+        run(now, "savings", "deposit", "--from", "bri", "--to", SAVINGS, "--amount", DEPOSIT)
         run(_ts(f"{month}-03"), "transfer", "--from", "bri", "--to", "tunai", "--amount", WITHDRAW[0],
             "--fee", WITHDRAW[1])
         for name, _amount, day in BILLS:
@@ -118,6 +124,8 @@ def _scenario(run):
     run(_ts(PAID_FOR[0]), "debt", "add", "--direction", "i_owe", "--person", "Citra", "--amount", PAID_FOR[1],
         "--paid-for", f"{PAID_FOR[2]}|{PAID_FOR[3]}")
     run(_ts(MOVE[0]), "budget", "move", "--from", MOVE[1], "--to", MOVE[2], "--amount", MOVE[3])
+    day, note, amount, cat = SAVINGS_SPEND
+    run(_ts(day), "savings", "spend", "--from", SAVINGS, "--item", f"{note}|{amount}|{cat}", "--mode", "purpose")
 
     results = {}
     for key, args in [("balance", ["balance"]),

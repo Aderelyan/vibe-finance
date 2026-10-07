@@ -6,7 +6,8 @@ from ..report import summarize
 from .budget import overview_message
 from .common import add_period_args, period_from_args
 
-TX_TYPES = ["income", "expense", "transfer", "adjustment", "debt_in", "debt_out"]
+TX_TYPES = ["income", "expense", "transfer", "adjustment", "debt_in", "debt_out", "deposit", "withdraw",
+            "savings_loan", "savings_repay"]
 KIND_WORD = {"expense": "Pengeluaran", "income": "Pemasukan"}
 
 
@@ -38,42 +39,56 @@ def register(sub):
 def cmd_balance(args, conn):
     bals = balances(conn)
     if args.account:
-        acc = resolve.account(conn, args.account, include_archived=True)
+        acc = resolve.account(conn, args.account, include_archived=True, kind=None)
         bal = bals[acc["id"]]
         msg = f"Saldo {acc['name']} ({ACCOUNT_TYPE_LABEL[acc['type']]}): {rupiah(bal)}."
         if bal < 0:
             msg += f" Peringatan: saldo {acc['name']} minus."
-        return success(msg, {"account": acc["name"], "type": acc["type"], "balance": bal})
+        return success(msg, {"account": acc["name"], "type": acc["type"], "balance": bal,
+                             "savings": acc["type"] == "savings"})
 
     rows = [r for r in conn.execute("SELECT * FROM accounts ORDER BY id")
             if not r["archived"] or bals[r["id"]] != 0]
+    wallets = [r for r in rows if r["type"] != "savings"]
+    savings = [r for r in rows if r["type"] == "savings"]
     if not rows:
         raise FinError("UNKNOWN_ACCOUNT", "Belum ada dompet.",
                        hint="Buat dulu, contoh: account add tunai --type cash --opening 100k")
-    total_dompet = sum(bals.values())
+    total_dompet = sum(bals[r["id"]] for r in conn.execute("SELECT id FROM accounts WHERE type != 'savings'"))
+    total_tabungan = sum(bals[r["id"]] for r in conn.execute("SELECT id FROM accounts WHERE type = 'savings'"))
     ov = budgets.overview(conn)
     owe, owed = debts.totals(conn)
-    net_worth = total_dompet + owed - owe
+    loans = debts.savings_loans_total(conn)
+    net_worth = total_dompet + total_tabungan + owed - owe
 
-    lines = ["Per dompet (uangnya di mana):"]
-    for r in rows:
-        lines.append(f"- {r['name']} ({ACCOUNT_TYPE_LABEL[r['type']]}): {rupiah(bals[r['id']])}"
-                     + (" [dihapus]" if r["archived"] else "") + (" [minus]" if bals[r["id"]] < 0 else ""))
+    def acc_line(r):
+        return (f"- {r['name']} ({ACCOUNT_TYPE_LABEL[r['type']]}): {rupiah(bals[r['id']])}"
+                + (" [dihapus]" if r["archived"] else "") + (" [minus]" if bals[r["id"]] < 0 else ""))
+
+    lines = ["Dompet (uang untuk dipakai):"] + [acc_line(r) for r in wallets]
     lines.append(f"Total dompet: {rupiah(total_dompet)}")
-    lines.append("")
-    lines.append("Per budget (uangnya untuk apa):")
+    lines += ["", "Per budget (uang di dompet untuk apa):"]
     lines += overview_message(conn, ov, total_dompet)
+    lines += ["", "Tabungan (terpisah, di luar budget):"]
+    lines += [acc_line(r) for r in savings] or ["- belum ada tabungan"]
+    lines.append(f"Total tabungan: {rupiah(total_tabungan)}")
+    if loans:
+        lines.append(f"Pinjaman dari tabungan yang belum dikembalikan: {rupiah(loans)}")
+    lines.append("")
     if owe or owed:
-        lines += ["", f"Hutang saya: {rupiah(owe)} | Piutang: {rupiah(owed)}",
-                  f"Kekayaan bersih: {rupiah(net_worth)}"]
+        lines.append(f"Hutang saya: {rupiah(owe)} | Piutang: {rupiah(owed)}")
+    lines.append(f"Kekayaan bersih (dompet + tabungan + piutang − hutang): {rupiah(net_worth)}")
     negatives = [r["name"] for r in rows if bals[r["id"]] < 0]
     if negatives:
-        lines.append(f"Peringatan: saldo dompet {', '.join(negatives)} minus.")
+        lines.append(f"Peringatan: saldo {', '.join(negatives)} minus.")
+    acc_dict = lambda r: {"name": r["name"], "type": r["type"], "balance": bals[r["id"]],  # noqa: E731
+                          "is_default": bool(r["is_default"]), "archived": bool(r["archived"])}
     return success("\n".join(lines), {
-        "accounts": [{"name": r["name"], "type": r["type"], "balance": bals[r["id"]],
-                      "is_default": bool(r["is_default"]), "archived": bool(r["archived"])} for r in rows],
-        "total_dompet": total_dompet, **ov, "consistent": total_dompet == ov["total_budget"],
-        "debt_total": owe, "receivable_total": owed, "net_worth": net_worth,
+        "accounts": [acc_dict(r) for r in wallets],
+        "savings": [{**acc_dict(r), "target_amount": r["target_amount"]} for r in savings],
+        "total_dompet": total_dompet, "total_tabungan": total_tabungan, **ov,
+        "consistent": total_dompet == ov["total_budget"],
+        "debt_total": owe, "receivable_total": owed, "savings_loans_total": loans, "net_worth": net_worth,
     })
 
 
@@ -84,9 +99,17 @@ def _section_lines(section):
             for c in section["by_category"]]
 
 
+def _savings_lines(sec):
+    if not sec["count"]:
+        return []
+    return ([f"Pengeluaran dari tabungan (terpisah, tidak memotong dompet dan budget): {rupiah(sec['total'])} "
+             f"({sec['count']} transaksi)"] + _section_lines(sec))
+
+
 def cmd_report(args, conn):
     period = period_from_args(conn, args)
-    account_ids = [resolve.account(conn, args.account, include_archived=True)["id"]] if args.account else None
+    acc = resolve.account(conn, args.account, include_archived=True, kind=None) if args.account else None
+    account_ids = [acc["id"]] if acc else None
     category_ids = None
     filters = {"account": args.account, "category": None}
     if args.category:
@@ -99,30 +122,39 @@ def cmd_report(args, conn):
     scope = ""
     if filters["category"]:
         scope += f" kategori {filters['category']}"
-    if account_ids:
-        scope += f" dari dompet {resolve.account(conn, args.account, include_archived=True)['name']}"
+    if acc:
+        scope += f" dari {'tabungan' if acc['type'] == 'savings' else 'dompet'} {acc['name']}"
+    # angka utama: pengeluaran dompet; pengeluaran dari tabungan dilaporkan terpisah
+    main_source = "savings" if acc and acc["type"] == "savings" else "wallet"
+    # dengan --account, laporan hanya tentang akun itu: tidak ada bagian tabungan tambahan
+    savings_sec = (summarize(conn, period, "expense", None, category_ids, source="savings") if not acc
+                   else {"total": 0, "count": 0, "by_category": []})
 
     data = {"period": period.to_dict(), "type": args.type, "filters": filters}
     if args.type in ("expense", "income"):
-        sec = summarize(conn, period, args.type, account_ids, category_ids)
+        sec = summarize(conn, period, args.type, account_ids, category_ids, source=main_source)
         data.update(sec)
         head = f"{KIND_WORD[args.type]}{scope} {period.describe}"
         if sec["count"] == 0:
-            msg = f"{head}: belum ada transaksi."
+            lines = [f"{head}: belum ada transaksi."]
         else:
-            msg = f"{head}: {rupiah(sec['total'])} dari {sec['count']} transaksi.\n" + "\n".join(_section_lines(sec))
-        return success(msg, data)
+            lines = [f"{head}: {rupiah(sec['total'])} dari {sec['count']} transaksi."] + _section_lines(sec)
+        if args.type == "expense":
+            data["savings_expense"] = savings_sec
+            lines += _savings_lines(savings_sec)
+        return success("\n".join(lines), data)
 
-    inc = summarize(conn, period, "income", account_ids, category_ids)
-    exp = summarize(conn, period, "expense", account_ids, category_ids)
+    inc = summarize(conn, period, "income", account_ids, category_ids, source=main_source)
+    exp = summarize(conn, period, "expense", account_ids, category_ids, source=main_source)
     net = inc["total"] - exp["total"]
-    data.update({"income": inc, "expense": exp, "net": net})
+    data.update({"income": inc, "expense": exp, "net": net, "savings_expense": savings_sec})
     lines = [f"Laporan{scope} {period.describe}:",
              f"Pemasukan: {rupiah(inc['total'])} ({inc['count']} transaksi)"]
     lines += _section_lines(inc)
     lines.append(f"Pengeluaran: {rupiah(exp['total'])} ({exp['count']} transaksi)")
     lines += _section_lines(exp)
     lines.append(f"Selisih: {('+' if net > 0 else '')}{rupiah(net)}")
+    lines += _savings_lines(savings_sec)
     return success("\n".join(lines), data)
 
 
@@ -141,7 +173,7 @@ def cmd_list(args, conn):
         where.append("t.type = ?")
         params.append(args.type)
     if args.account:
-        acc = resolve.account(conn, args.account, include_archived=True)
+        acc = resolve.account(conn, args.account, include_archived=True, kind=None)
         where.append("(t.account_id = ? OR t.to_account_id = ?)")
         params += [acc["id"], acc["id"]]
     if args.category:

@@ -8,22 +8,26 @@ riwayat perubahan spesifikasi ada di `docs\`.
 1. **Semua hitungan ada di kode.** Saldo, total, persen, selisih, semuanya dihitung `finance.py`.
 2. **Script tidak percaya input.** Setiap argumen divalidasi. Input salah ditolak dengan pesan yang menjelaskan cara memperbaikinya, dan data tidak berubah.
 3. **Setiap output adalah satu objek JSON** dengan field `message` berbahasa Indonesia yang bisa langsung dibaca orang.
-4. **Saldo tidak disimpan, selalu dihitung** dari tabel transaksi (dompet) dan transaksi + pindahan budget (budget).
+4. **Saldo tidak disimpan, selalu dihitung** dari tabel transaksi (dompet dan tabungan) dan transaksi + pindahan budget (budget).
 5. **Transaksi tidak pernah benar-benar dihapus.** Hapus transaksi = soft delete (`deleted_at`). Dompet, kategori, budget, tabungan yang sudah pernah dipakai diarsipkan; yang belum pernah dipakai boleh dihapus sungguhan.
 6. **Nominal adalah integer rupiah.** Tidak ada float.
 7. **Excel hanya hasil ekspor.** Sumber kebenaran adalah SQLite.
 8. **Tidak ada input interaktif.** Tidak boleh ada `input()` atau prompt. Semua lewat argumen, supaya bisa dipanggil program lain.
-9. **Total semua dompet selalu sama dengan total semua budget.** Setiap transaksi selain `transfer` wajib punya `budget_id`; transfer wajib tidak punya. Pindahan budget selalu berpasangan.
+9. **Total dompet operasional (cash/bank/ewallet) selalu sama dengan total semua budget.** Tabungan (akun `savings`) di luar aturan ini. Transaksi yang mengubah total dompet operasional wajib punya `budget_id` (`deposit`, `withdraw`, dan income/expense/adjustment/debt di dompet operasional); yang lain wajib tidak punya (`transfer`, `savings_loan`, `savings_repay`, expense/adjustment di tabungan). `insert_tx` memeriksanya. Pindahan budget selalu berpasangan.
 
 ## Peta kode
 
 - `fin/cli.py`: parser (error argparse → JSON `BAD_ARGS`), opsi tersembunyi `--now`, penangkap `INTERNAL`.
-- `fin/db.py`: skema, migrasi via `meta.schema_version` (sekarang v3), `write(conn)` = satu transaksi DB + backup harian.
+- `fin/db.py`: skema, migrasi via `meta.schema_version` (sekarang v4), `write(conn)` = satu transaksi DB + backup harian.
   Folder data: `FINANCE_HOME`, atau `default_home()` = `<USERPROFILE atau HOME>/Documents/Manager/Finance/data`
   (aturan yang sama dengan `fin.sh`; jangan tulis username di repo). Itu folder data ASLI pengguna.
 - `fin/parse.py`: `parse_amount`, `parse_date`, `parse_period`. Semua input nominal/tanggal/periode lewat sini.
-- `fin/resolve.py`: cari dompet/kategori dari nama atau alias; tebak kategori dari kata kunci.
-- `fin/ledger.py`: tulis transaksi, saldo dompet, `new_group()` (mencatat ke `op_groups` untuk urutan undo).
+- `fin/resolve.py`: cari dompet/kategori dari nama atau alias; tebak kategori dari kata kunci. `account(kind=...)`:
+  bawaan `"operational"` menolak tabungan; `"savings"` hanya tabungan; `None` keduanya (adjust, balance, report, list).
+- `fin/ledger.py`: tulis transaksi, saldo akun, `new_group()` / `add_restore()` (op_groups untuk urutan undo). Docstring-nya
+  berisi tabel efek tiap jenis transaksi pada dompet, tabungan, dan budget; ubah tabel itu dulu sebelum menambah jenis.
+- `fin/commands/savings.py`: tabungan sebagai akun terpisah (add/list/set/rename/remove/deposit/withdraw/spend).
+  Pinjaman tabungan = hutang dengan `debts.savings_account_id`; pelunasannya di `commands/debt.py` (`_pay_savings_loan`).
 - `fin/budgets.py`: saldo budget, `find()` (budget dari nama budget/kategori), pindahan, tutup budget.
 - `fin/report.py`: ringkasan per kategori. `fin/debts.py`: sisa dan status hutang, `find()` dari `--person`/`--id`.
 - `fin/analysis.py`: fakta `analyze` (periode sebelumnya, harian, proyeksi). `fin/export.py`: workbook .xlsx;
@@ -48,7 +52,9 @@ riwayat perubahan spesifikasi ada di `docs\`.
 - Error yang diketahui: lempar `FinError(code, message, hint)`. Kode error tetap (lihat `fin/output.py`); jangan menambah kode baru tanpa memperbarui BLUEPRINT dan dokumentasi.
 - Validasi dulu, baru tulis di dalam `with write(conn):`. Error di dalam blok itu membatalkan semuanya.
 - Setiap pencatatan uang (transaksi atau pindahan budget) memakai `group_id` dari `new_group(conn, action, restore)` supaya bisa di-undo.
-- Tes: `.venv\Scripts\python -m pytest -q`. Tes memakai `FINANCE_HOME` sementara dan `--now`, dan setiap pemanggilan di tes memeriksa total dompet = total budget.
+- Tes: `.venv\Scripts\python -m pytest -q`. Tes memakai `FINANCE_HOME` sementara dan `--now`, dan setiap pemanggilan di tes memeriksa
+  (langsung dari tabel) total dompet operasional = total budget, aturan `budget_id`, kelas akun transfer/deposit/withdraw,
+  dan tabungan tidak pernah default.
   Fixture autouse `_never_touch_real_data` di `tests/conftest.py` mengarahkan `FINANCE_HOME`, `USERPROFILE`, dan
   `HOME` ke folder sementara; jangan dihapus. Saat mencoba perintah manual, selalu set `FINANCE_HOME` ke folder
   sementara supaya data asli tidak tersentuh.

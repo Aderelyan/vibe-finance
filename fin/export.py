@@ -4,7 +4,7 @@ from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 
 from . import budgets, debts
-from .ledger import ACCOUNT_TYPE_LABEL, TX_SELECT, TYPE_LABEL, balances
+from .ledger import ACCOUNT_TYPE_LABEL, TX_SELECT, TYPE_LABEL, balances, source_of
 from .report import summarize
 
 MONEY = "#,##0"
@@ -40,29 +40,37 @@ def build(conn, period, path):
 
     txs = conn.execute(TX_SELECT + " WHERE t.deleted_at IS NULL AND t.ts BETWEEN ? AND ? ORDER BY t.ts, t.id",
                        (start, end)).fetchall()
-    tx_rows = [(r["id"], r["ts"], TYPE_LABEL[r["type"]], r["amount"], r["account"], r["to_account"],
+    tx_rows = [(r["id"], r["ts"], TYPE_LABEL[r["type"]], r["amount"], source_of(r), r["account"], r["to_account"],
                 r["category"], r["budget"], r["note"], r["raw_text"]) for r in txs]
-    _sheet(wb, "Transaksi", ["ID", "Waktu", "Jenis", "Jumlah", "Dompet", "Ke dompet", "Kategori", "Budget",
+    _sheet(wb, "Transaksi", ["ID", "Waktu", "Jenis", "Jumlah", "Sumber", "Dompet", "Ke dompet", "Kategori", "Budget",
                              "Catatan", "Teks asli"], tx_rows, money_cols={"Jumlah"})
 
     summary_rows = []
-    for kind, label in (("expense", "pengeluaran"), ("income", "pemasukan")):
-        sec = summarize(conn, period, kind)
+    for kind, source, label in (("expense", "wallet", "pengeluaran"), ("income", "wallet", "pemasukan"),
+                                ("expense", "savings", "pengeluaran dari tabungan")):
+        sec = summarize(conn, period, kind, source=source)
+        if source == "savings" and not sec["count"]:
+            continue
         summary_rows += [(label, c["category"], c["amount"], c["percent"], c["count"]) for c in sec["by_category"]]
         summary_rows.append((label, "TOTAL", sec["total"], 100.0 if sec["total"] else 0.0, sec["count"]))
     _sheet(wb, "Ringkasan per kategori", ["Jenis", "Kategori", "Jumlah", "Persen", "Transaksi"], summary_rows,
            money_cols={"Jumlah"}, pct_cols={"Persen"})
 
+    # dompet operasional dan tabungan punya total masing-masing; hanya total dompet yang sama dengan total budget
     bals = balances(conn)
-    accounts = [r for r in conn.execute("SELECT * FROM accounts ORDER BY id") if not r["archived"] or bals[r["id"]]]
-    acc_rows = [(r["name"], ACCOUNT_TYPE_LABEL[r["type"]], bals[r["id"]],
-                 "default" if r["is_default"] else ("dihapus" if r["archived"] else "")) for r in accounts]
-    acc_rows.append(("TOTAL", "", sum(bals.values()), ""))
+    accounts = [r for r in conn.execute("SELECT * FROM accounts ORDER BY type = 'savings', id")
+                if not r["archived"] or bals[r["id"]]]
+    acc_rows = []
+    for savings, total_label in ((False, "TOTAL DOMPET"), (True, "TOTAL TABUNGAN")):
+        group = [r for r in accounts if (r["type"] == "savings") == savings]
+        acc_rows += [(r["name"], ACCOUNT_TYPE_LABEL[r["type"]], bals[r["id"]],
+                      "default" if r["is_default"] else ("dihapus" if r["archived"] else "")) for r in group]
+        acc_rows.append((total_label, "", sum(bals[r["id"]] for r in group), ""))
     _sheet(wb, "Saldo dompet", ["Dompet", "Tipe", "Saldo", "Keterangan"], acc_rows, money_cols={"Saldo"})
 
     spent = {r[0]: r[1] for r in conn.execute(
         "SELECT budget_id, SUM(amount) FROM transactions WHERE deleted_at IS NULL AND type = 'expense' "
-        "AND ts BETWEEN ? AND ? GROUP BY budget_id", (start, end))}
+        "AND budget_id IS NOT NULL AND ts BETWEEN ? AND ? GROUP BY budget_id", (start, end))}
     ov = budgets.overview(conn)
     bud_rows = [(b["name"], budgets.KIND_LABEL[b["kind"]], b["balance"], spent.get(b["id"], 0),
                  "ditutup" if b["archived"] else "") for b in ov["budgets"]]
@@ -73,7 +81,8 @@ def build(conn, period, path):
     debt_rows = []
     for d in conn.execute("SELECT * FROM debts WHERE archived = 0 ORDER BY status, id").fetchall():
         i = debts.info(conn, d)
-        debt_rows.append((i["id"], debts.DIRECTION_LABEL[i["direction"]], i["person"], i["principal"], i["paid"],
+        kind = "pinjaman dari tabungan" if i["savings"] else debts.DIRECTION_LABEL[i["direction"]]
+        debt_rows.append((i["id"], kind, i["person"], i["principal"], i["paid"],
                           i["remaining"], "lunas" if i["status"] == "paid" else "belum lunas", i["due_date"],
                           i["note"]))
     _sheet(wb, "Hutang piutang", ["ID", "Jenis", "Orang", "Pokok", "Dibayar", "Sisa", "Status", "Jatuh tempo",

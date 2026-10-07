@@ -24,13 +24,24 @@ def clean_name(text, what="nama"):
 
 # ---------- dompet ----------
 
-def account_names(conn, include_archived=False):
-    sql = "SELECT name FROM accounts" + ("" if include_archived else " WHERE archived = 0") + " ORDER BY id"
+def account_names(conn, include_archived=False, kind="operational"):
+    """Nama akun aktif. kind: 'operational' (dompet), 'savings' (tabungan), atau None (semua)."""
+    where = [] if include_archived else ["archived = 0"]
+    if kind == "operational":
+        where.append("type != 'savings'")
+    elif kind == "savings":
+        where.append("type = 'savings'")
+    sql = "SELECT name FROM accounts" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY id"
     return [r["name"] for r in conn.execute(sql)]
 
 
-def _account_hint(conn):
-    names = account_names(conn)
+def _account_hint(conn, kind="operational"):
+    if kind == "savings":
+        names = account_names(conn, kind="savings")
+        if not names:
+            return "Belum ada tabungan. Buat dulu, contoh: savings add \"dana darurat\" --target 5jt"
+        return "Tabungan yang ada: " + ", ".join(names)
+    names = account_names(conn, kind=kind)
     if not names:
         return "Belum ada dompet. Buat dulu, contoh: account add tunai --type cash --opening 100k --default"
     return "Pilihan: " + ", ".join(names)
@@ -49,19 +60,32 @@ def find_account(conn, name):
     return None
 
 
-def account(conn, name, include_archived=False):
+def account(conn, name, include_archived=False, kind="operational"):
+    """Dompet/tabungan dari nama atau alias.
+
+    kind='operational' (bawaan): hanya dompet cash/bank/ewallet. kind='savings': hanya tabungan. None: keduanya.
+    """
     row = find_account(conn, name)
+    what = "Tabungan" if kind == "savings" else "Dompet"
     if row is None:
-        raise FinError("UNKNOWN_ACCOUNT", f"Dompet '{name}' tidak ada.", hint=_account_hint(conn))
+        raise FinError("UNKNOWN_ACCOUNT", f"{what} '{name}' tidak ada.", hint=_account_hint(conn, kind))
+    is_sav = row["type"] == "savings"
+    if kind == "operational" and is_sav:
+        raise FinError("UNKNOWN_ACCOUNT", f"'{row['name']}' adalah tabungan, bukan dompet.",
+                       hint="Untuk tabungan pakai perintah savings (deposit, withdraw, spend). "
+                            + _account_hint(conn, kind))
+    if kind == "savings" and not is_sav:
+        raise FinError("UNKNOWN_ACCOUNT", f"'{row['name']}' adalah dompet, bukan tabungan.",
+                       hint=_account_hint(conn, kind))
     if row["archived"] and not include_archived:
-        raise FinError("UNKNOWN_ACCOUNT", f"Dompet '{row['name']}' sudah dihapus.",
-                       hint=f"Untuk memakainya lagi: account add {row['name']} --type {row['type']}. "
-                            f"{_account_hint(conn)}")
+        again = (f"savings add \"{row['name']}\"" if is_sav else f"account add {row['name']} --type {row['type']}")
+        raise FinError("UNKNOWN_ACCOUNT", f"{'Tabungan' if is_sav else 'Dompet'} '{row['name']}' sudah dihapus.",
+                       hint=f"Untuk memakainya lagi: {again}. {_account_hint(conn, 'savings' if is_sav else kind)}")
     return row
 
 
 def default_account(conn):
-    row = conn.execute("SELECT * FROM accounts WHERE is_default = 1 AND archived = 0").fetchone()
+    row = conn.execute("SELECT * FROM accounts WHERE is_default = 1 AND archived = 0 AND type != 'savings'").fetchone()
     if row is None:
         raise FinError("NO_DEFAULT_ACCOUNT", "Dompet tidak disebut dan belum ada dompet default.",
                        hint="Sebutkan dompet dengan --account, atau atur default: account set-default <nama>. "
